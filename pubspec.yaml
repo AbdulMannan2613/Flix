@@ -25,11 +25,15 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/icon.png
 
+# NOTE: icon.png is NOT listed under assets above on purpose.
+# flutter_launcher_icons reads it directly from the file, but if it were
+# listed as a Flutter asset and the file was missing from the build folder,
+# 'flutter build apk' would fail. The workflow copies icon.png into
+# temp_flix/assets/ for the launcher tool only.
 flutter_launcher_icons:
   android: true
   ios: false
   image_path: "assets/icon.png"
   min_sdk_android: 21
+  
