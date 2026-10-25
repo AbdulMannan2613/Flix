@@ -41,6 +41,8 @@ jobs:
       - name: Build APK
         run: |
           cd temp_flix
+          # Firebase needs minSdk 23; fresh Flutter projects may use 21
+          sed -i 's/minSdk = 21/minSdk = 23/; s/minSdkVersion 21/minSdkVersion 23/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
           flutter pub get
           flutter build apk --release
 
