@@ -37,6 +37,9 @@ jobs:
           flutter create --project-name flix --org com.dino.flix --platforms android temp_flix
           cp lib/main.dart temp_flix/lib/main.dart
           cp pubspec.yaml temp_flix/pubspec.yaml
+          # App icon: use assets/icon.png if uploaded, or icon.png in the repo root
+          if [ -f assets/icon.png ]; then mkdir -p temp_flix/assets; cp assets/icon.png temp_flix/assets/icon.png;
+          elif [ -f icon.png ]; then mkdir -p temp_flix/assets; cp icon.png temp_flix/assets/icon.png; fi
 
       - name: Build APK
         run: |
@@ -44,6 +47,8 @@ jobs:
           # Firebase needs minSdk 23; fresh Flutter projects may use 21
           sed -i 's/minSdk = 21/minSdk = 23/; s/minSdkVersion 21/minSdkVersion 23/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
           flutter pub get
+          # Generate the launcher icon from assets/icon.png (keeps building even if this fails)
+          dart run flutter_launcher_icons || echo "Icon generation skipped, continuing with default icon"
           flutter build apk --release
 
       - name: Upload APK
