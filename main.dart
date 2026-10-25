@@ -1,0 +1,1271 @@
+// FLIX - Stream Unlimited Movies & TV Shows
+// Flutter + Firebase (Firestore) + local fallback
+// If Firebase is NOT connected yet, the app still runs with sample movies
+// and admin-added movies saved locally. Connect Firebase later (see README).
+// IMPORTANT: Only add videos you own or have a licence for. The videoUrl
+// field must be YOUR hosted link (Firebase Storage / your server), not a
+// link copied from another streaming site.
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:dio/dio.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:video_player/video_player.dart';
+
+const Color kBg = Color(0xFF0B1220);
+const Color kCard = Color(0xFF1A2436);
+const Color kCard2 = Color(0xFF232F45);
+const Color kRed = Color(0xFFE11D2E);
+const Color kBlue = Color(0xFF4A90E2);
+const Color kGrey = Color(0xFF8A94A6);
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {
+    // Firebase not connected yet - app runs on local sample data.
+  }
+  runApp(const FlixApp());
+}
+
+class FlixApp extends StatelessWidget {
+  const FlixApp({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Flix',
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: kBg,
+        colorScheme: const ColorScheme.dark(primary: kRed, surface: kBg),
+        appBarTheme: const AppBarTheme(backgroundColor: kBg, elevation: 0),
+      ),
+      home: const SplashScreen(),
+    );
+  }
+}
+
+// ---------------- MODEL ----------------
+class Movie {
+  final String id, title, description, category, language, posterUrl, videoUrl, type;
+  final int year;
+  final double rating;
+  final bool isTrending;
+  final Map<String, String> qualities;
+  Movie({
+    required this.id, required this.title, required this.description,
+    required this.category, required this.language, required this.posterUrl,
+    required this.videoUrl, required this.type, required this.year,
+    required this.rating, this.isTrending = false, this.qualities = const {},
+  });
+  factory Movie.fromMap(String id, Map<String, dynamic> m) => Movie(
+    id: id,
+    title: m['title'] ?? 'Untitled',
+    description: m['description'] ?? '',
+    category: m['category'] ?? 'Action',
+    language: m['language'] ?? 'Hindi',
+    posterUrl: m['posterUrl'] ?? '',
+    videoUrl: m['videoUrl'] ?? '',
+    type: m['type'] ?? 'Movie',
+    year: (m['year'] ?? 2025) as int,
+    rating: ((m['rating'] ?? 7.0) as num).toDouble(),
+    isTrending: m['isTrending'] ?? false,
+    qualities: Map<String, String>.from(m['qualities'] ?? {}),
+  );
+  Map<String, dynamic> toMap() => {
+    'title': title, 'description': description, 'category': category,
+    'language': language, 'posterUrl': posterUrl, 'videoUrl': videoUrl,
+    'type': type, 'year': year, 'rating': rating, 'isTrending': isTrending,
+    'qualities': qualities,
+  };
+}
+
+List<Movie> sampleMovies() {
+  const v = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+  const v2 = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+  String p(String s) => 'https://picsum.photos/seed/$s/400/600';
+  return [
+    Movie(id: 's1', title: 'The Last Horizon', description: 'A hero returns to save his city from a forgotten enemy. Epic action, big battles and a fight for the future.', category: 'Action', language: 'Hindi', posterUrl: p('flix1'), videoUrl: v, type: 'Movie', year: 2025, rating: 8.3, isTrending: true),
+    Movie(id: 's2', title: 'City of Shadows', description: 'A detective follows a trail through the dark streets of the city.', category: 'Thriller', language: 'Tamil', posterUrl: p('flix2'), videoUrl: v2, type: 'Movie', year: 2026, rating: 8.8, isTrending: true),
+    Movie(id: 's3', title: 'Love in Paris', description: 'Two strangers meet in Paris and change each other\'s lives forever.', category: 'Romance', language: 'English', posterUrl: p('flix3'), videoUrl: v, type: 'Movie', year: 2024, rating: 7.9, isTrending: true),
+    Movie(id: 's4', title: 'Jungle Quest', description: 'An adventure deep into a jungle no one has returned from.', category: 'Adventure', language: 'Telugu', posterUrl: p('flix4'), videoUrl: v2, type: 'Movie', year: 2025, rating: 8.1, isTrending: true),
+    Movie(id: 's5', title: 'Night Haunting', description: 'A family moves into an old house and discovers its secret.', category: 'Horror', language: 'Malayalam', posterUrl: p('flix5'), videoUrl: v, type: 'Movie', year: 2023, rating: 7.4, isTrending: true),
+    Movie(id: 's6', title: 'Family Reunion', description: 'A warm family drama about coming home after many years.', category: 'Family', language: 'Hindi', posterUrl: p('flix6'), videoUrl: v2, type: 'Movie', year: 2024, rating: 8.0),
+    Movie(id: 's7', title: 'Space Voyage', description: 'A crew travels beyond the stars to find a new home.', category: 'Action', language: 'English', posterUrl: p('flix7'), videoUrl: v, type: 'TV Show', year: 2026, rating: 9.1),
+    Movie(id: 's8', title: 'Comedy Nights', description: 'Non-stop comedy from a group of friends who always get into trouble.', category: 'Comedy', language: 'Hindi', posterUrl: p('flix8'), videoUrl: v2, type: 'TV Show', year: 2025, rating: 7.7),
+  ];
+}
+
+// ---------------- REPOSITORY + LOCAL STORAGE ----------------
+class MovieRepo {
+  static Future<List<Movie>> getAll() async {
+    final local = await _localMovies();
+    // Try Firestore first - if it has movies, use them + local admin movies
+    try {
+      if (Firebase.apps.isNotEmpty) {
+        final snap = await FirebaseFirestore.instance.collection('movies').get();
+        if (snap.docs.isNotEmpty) {
+          final fire = snap.docs.map((d) => Movie.fromMap(d.id, d.data())).toList();
+          final ids = fire.map((m) => m.id).toSet();
+          return [...fire, ...local.where((m) => !ids.contains(m.id))];
+        }
+      }
+    } catch (_) {}
+    return local.isEmpty ? sampleMovies() : local;
+  }
+
+  static Future<List<Movie>> _localMovies() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('admin_movies');
+    if (raw == null) return sampleMovies();
+    try {
+      final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+      return list.map((m) => Movie.fromMap(m['id'] ?? '', m)).toList();
+    } catch (_) { return sampleMovies(); }
+  }
+
+  static Future<void> saveLocal(List<Movie> movies) async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = movies.map((m) => {...m.toMap(), 'id': m.id}).toList();
+    await prefs.setString('admin_movies', jsonEncode(list));
+  }
+
+  static Future<void> addMovie(Movie m) async {
+    try {
+      if (Firebase.apps.isNotEmpty) {
+        await FirebaseFirestore.instance.collection('movies').add(m.toMap());
+      }
+    } catch (_) {}
+    final all = await _localMovies();
+    // Avoid duplicating sample movies on first admin save
+    final base = all.where((x) => !x.id.startsWith('s')).toList();
+    await saveLocal([...sampleMovies(), ...base, m]);
+  }
+
+  static Future<void> deleteMovie(String id) async {
+    try {
+      if (Firebase.apps.isNotEmpty) {
+        await FirebaseFirestore.instance.collection('movies').doc(id).delete();
+      }
+    } catch (_) {}
+    final all = await _localMovies();
+    await saveLocal(all.where((m) => m.id != id).toList());
+  }
+
+  static Future<void> setTrending(List<String> trendingIds) async {
+    final all = await getAll();
+    final updated = all.map((m) => Movie(
+      id: m.id, title: m.title, description: m.description, category: m.category,
+      language: m.language, posterUrl: m.posterUrl, videoUrl: m.videoUrl,
+      type: m.type, year: m.year, rating: m.rating,
+      isTrending: trendingIds.contains(m.id), qualities: m.qualities,
+    )).toList();
+    await saveLocal(updated);
+    try {
+      if (Firebase.apps.isNotEmpty) {
+        for (final m in updated) {
+          await FirebaseFirestore.instance.collection('movies').doc(m.id).set(m.toMap(), SetOptions(merge: true));
+        }
+      }
+    } catch (_) {}
+  }
+}
+
+class Prefs {
+  static Future<List<String>> searchHistory() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getStringList('search_history') ?? [];
+  }
+  static Future<void> addSearch(String q) async {
+    if (q.trim().isEmpty) return;
+    final p = await SharedPreferences.getInstance();
+    final h = await searchHistory();
+    h.remove(q); h.insert(0, q);
+    await p.setStringList('search_history', h.take(20).toList());
+  }
+  static Future<void> removeSearch(String q) async {
+    final p = await SharedPreferences.getInstance();
+    final h = await searchHistory(); h.remove(q);
+    await p.setStringList('search_history', h);
+  }
+  static Future<void> clearSearch() async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove('search_history');
+  }
+  static Future<String> username() async {
+    final p = await SharedPreferences.getInstance();
+    var u = p.getString('username');
+    if (u == null) {
+      u = 'flix_user_${1000 + DateTime.now().millisecond % 9000}';
+      await p.setString('username', u);
+    }
+    return u;
+  }
+  static Future<int> invitedCount() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getInt('invited_count') ?? 0;
+  }
+  static Future<void> addInvite() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setInt('invited_count', await invitedCount() + 1);
+  }
+  // Ad-free days: 1 invite=3, 3 invites=+5, 5=+10, 7=+15, 10=+3650
+  static int adFreeDays(int invited) {
+    var d = 0;
+    if (invited >= 1) d += 3;
+    if (invited >= 3) d += 5;
+    if (invited >= 5) d += 10;
+    if (invited >= 7) d += 15;
+    if (invited >= 10) d += 3650;
+    return d;
+  }
+}
+
+class WatchEntry {
+  final String movieId; final int position, duration;
+  WatchEntry(this.movieId, this.position, this.duration);
+  Map<String, dynamic> toMap() => {'movieId': movieId, 'position': position, 'duration': duration};
+  factory WatchEntry.fromMap(Map<String, dynamic> m) =>
+      WatchEntry(m['movieId'], m['position'] ?? 0, m['duration'] ?? 0);
+}
+Future<List<WatchEntry>> getWatchHistory() async {
+  final p = await SharedPreferences.getInstance();
+  final raw = p.getString('watch_history');
+  if (raw == null) return [];
+  try { return (jsonDecode(raw) as List).map((e) => WatchEntry.fromMap(Map<String, dynamic>.from(e))).toList(); } catch (_) { return []; }
+}
+Future<void> saveWatchPosition(String movieId, int pos, int dur) async {
+  if (dur <= 0 || pos <= 0) return;
+  final p = await SharedPreferences.getInstance();
+  final list = await getWatchHistory();
+  list.removeWhere((e) => e.movieId == movieId);
+  list.insert(0, WatchEntry(movieId, pos, dur));
+  await p.setString('watch_history', jsonEncode(list.map((e) => e.toMap()).toList()));
+}
+Future<void> removeWatch(String movieId) async {
+  final p = await SharedPreferences.getInstance();
+  final list = await getWatchHistory();
+  list.removeWhere((e) => e.movieId == movieId);
+  await p.setString('watch_history', jsonEncode(list.map((e) => e.toMap()).toList()));
+}
+String fmtTime(int seconds) {
+  final h = seconds ~/ 3600, m = (seconds % 3600) ~/ 60, s = seconds % 60;
+  if (h > 0) return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+}
+
+// ---------------- SHARED WIDGETS ----------------
+class MovieCard extends StatelessWidget {
+  final Movie movie; final double width;
+  const MovieCard({super.key, required this.movie, this.width = 110});
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DetailsScreen(movie: movie))),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Stack(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(movie.posterUrl, width: width, height: width * 1.45, fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(width: width, height: width * 1.45, color: kCard2, child: const Icon(Icons.movie, color: kGrey))),
+              ),
+              Positioned(top: 0, left: 0, child: Container(color: kBlue, padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), child: Text(movie.language, style: const TextStyle(fontSize: 10, color: Colors.white)))),
+              Positioned(bottom: 4, right: 4, child: Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 13))),
+            ],
+          ),
+          const SizedBox(height: 4),
+          SizedBox(width: width, child: Text(movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------- SPLASH (RED, like 1st image) ----------------
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+class _SplashScreenState extends State<SplashScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const MainShell()));
+    });
+  }
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: Color(0xFF0A0F1E),
+      body: Center(
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          CircleAvatar(radius: 32, backgroundColor: kRed, child: Icon(Icons.play_arrow, color: Colors.black, size: 38)),
+          SizedBox(width: 12),
+          Text('FLIX', style: TextStyle(color: kRed, fontSize: 52, fontWeight: FontWeight.w900, letterSpacing: 2)),
+        ]),
+      ),
+    );
+  }
+}
+
+// ---------------- MAIN SHELL: ONLY 3 PAGES ----------------
+class MainShell extends StatefulWidget {
+  const MainShell({super.key});
+  @override
+  State<MainShell> createState() => _MainShellState();
+}
+class _MainShellState extends State<MainShell> {
+  int _index = 0;
+  @override
+  Widget build(BuildContext context) {
+    final pages = [const HomeScreen(), const CategoriesScreen(), const MeScreen()];
+    return Scaffold(
+      body: pages[_index],
+      bottomNavigationBar: BottomNavigationBar(
+        backgroundColor: const Color(0xFF111827),
+        selectedItemColor: Colors.white, unselectedItemColor: kGrey,
+        currentIndex: _index,
+        onTap: (i) => setState(() => _index = i),
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
+          BottomNavigationBarItem(icon: Icon(Icons.folder), label: 'Categories'),
+          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Me'),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------- HOME ----------------
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+class _HomeScreenState extends State<HomeScreen> {
+  late Future<List<Movie>> _future;
+  final _page = PageController();
+  int _pageIndex = 0;
+  Timer? _timer;
+  @override
+  void initState() {
+    super.initState();
+    _future = MovieRepo.getAll();
+    _timer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (!_page.hasClients) return;
+      // Auto-slide trending, loop back at the end. User can also swipe manually.
+      _future.then((movies) {
+        final t = movies.where((m) => m.isTrending).toList();
+        final list = t.isEmpty ? movies : t;
+        if (list.isEmpty) return;
+        final next = (_pageIndex + 1) % list.length;
+        _page.animateToPage(next, duration: const Duration(milliseconds: 500), curve: Curves.easeInOut);
+      });
+    });
+  }
+  @override
+  void dispose() { _timer?.cancel(); _page.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: FutureBuilder<List<Movie>>(
+        future: _future,
+        builder: (context, snap) {
+          if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: kRed));
+          final movies = snap.data!;
+          final trending = movies.where((m) => m.isTrending).toList();
+          final slider = trending.isEmpty ? movies.take(5).toList() : trending.take(5).toList();
+          return SingleChildScrollView(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SearchScreen())),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        decoration: BoxDecoration(color: kCard2, borderRadius: BorderRadius.circular(10)),
+                        child: const Row(children: [Icon(Icons.search, color: kGrey), SizedBox(width: 8), Text('Search movies, TV shows...', style: TextStyle(color: kGrey))]),
+                      ),
+                    ),
+                  ),
+                  IconButton(icon: const Icon(Icons.history), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()))),
+                  IconButton(icon: const Icon(Icons.download), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DownloadsScreen()))),
+                ]),
+              ),
+              const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('Trending Movies', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 220,
+                child: PageView.builder(
+                  controller: _page,
+                  onPageChanged: (i) => setState(() => _pageIndex = i),
+                  itemCount: slider.length,
+                  itemBuilder: (context, i) {
+                    final m = slider[i];
+                    return GestureDetector(
+                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DetailsScreen(movie: m))),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Stack(children: [
+                          ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(m.posterUrl, width: double.infinity, height: 220, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: kCard2))),
+                          Positioned(left: 12, bottom: 12, child: Text(m.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 8, color: Colors.black)]))),
+                        ]),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(mainAxisAlignment: MainAxisAlignment.center, children: List.generate(slider.length, (i) => Container(margin: const EdgeInsets.symmetric(horizontal: 3), width: _pageIndex == i ? 18 : 7, height: 7, decoration: BoxDecoration(color: _pageIndex == i ? kRed : Colors.white54, borderRadius: BorderRadius.circular(4))))),
+              const SizedBox(height: 20),
+              const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('Popular Movies', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: GridView.builder(
+                  shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.62, crossAxisSpacing: 8, mainAxisSpacing: 12),
+                  itemCount: movies.length,
+                  itemBuilder: (context, i) => MovieCard(movie: movies[i], width: double.infinity),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ]),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ---------------- CATEGORIES (exact filters from screenshot) ----------------
+class CategoriesScreen extends StatefulWidget {
+  const CategoriesScreen({super.key});
+  @override
+  State<CategoriesScreen> createState() => _CategoriesScreenState();
+}
+class _CategoriesScreenState extends State<CategoriesScreen> {
+  String _type = 'Movies';
+  String _genre = 'All';
+  String _year = 'All';
+  String _sort = 'Popularity';
+  final _genres = ['All', 'Adventure', 'Romance', 'Horror', 'Family', 'Action', 'Thriller', 'Comedy', 'Drama'];
+  final _years = ['All', '2026', '2025', '2024', '2023', '2022'];
+  final _sorts = ['Popularity', 'Latest', 'Top today'];
+
+  Widget _chips(List<String> items, String selected, ValueChanged<String> onPick) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: items.map((e) => Padding(
+        padding: const EdgeInsets.only(right: 10),
+        child: ChoiceChip(
+          label: Text(e), selected: selected == e,
+          selectedColor: kCard2, backgroundColor: Colors.transparent,
+          labelStyle: TextStyle(color: selected == e ? Colors.white : kGrey, fontWeight: selected == e ? FontWeight.bold : FontWeight.normal),
+          onSelected: (_) => setState(() => onPick(e)),
+        ),
+      )).toList()),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(children: [
+            const Expanded(child: Center(child: Text('Categories', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)))),
+            IconButton(icon: const Icon(Icons.search), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SearchScreen()))),
+          ]),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Column(children: [
+            Row(children: [
+              ChoiceChip(label: const Text('Movies'), selected: _type == 'Movies', selectedColor: kCard2, onSelected: (_) => setState(() => _type = 'Movies')),
+              const SizedBox(width: 10),
+              ChoiceChip(label: const Text('TV Shows'), selected: _type == 'TV Shows', selectedColor: kCard2, onSelected: (_) => setState(() => _type = 'TV Shows')),
+            ]),
+            const SizedBox(height: 10),
+            _chips(_genres, _genre, (v) => _genre = v),
+            const SizedBox(height: 10),
+            _chips(_years, _year, (v) => _year = v),
+            const SizedBox(height: 10),
+            _chips(_sorts, _sort, (v) => _sort = v),
+          ]),
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: FutureBuilder<List<Movie>>(
+            future: MovieRepo.getAll(),
+            builder: (context, snap) {
+              if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: kRed));
+              var list = snap.data!.where((m) => m.type == (_type == 'Movies' ? 'Movie' : 'TV Show')).toList();
+              if (_genre != 'All') list = list.where((m) => m.category == _genre).toList();
+              if (_year != 'All') list = list.where((m) => m.year.toString() == _year).toList();
+              if (_sort == 'Latest') list.sort((a, b) => b.year.compareTo(a.year));
+              else list.sort((a, b) => b.rating.compareTo(a.rating)); // Popularity + Top today
+              if (list.isEmpty) return const Center(child: Text('No movies in this category yet.\nAdd one from the Admin panel.', textAlign: TextAlign.center, style: TextStyle(color: kGrey)));
+              return GridView.builder(
+                padding: const EdgeInsets.all(12),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, childAspectRatio: 0.58, crossAxisSpacing: 8, mainAxisSpacing: 12),
+                itemCount: list.length,
+                itemBuilder: (context, i) => MovieCard(movie: list[i], width: double.infinity),
+              );
+            },
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ---------------- SEARCH ----------------
+class SearchScreen extends StatefulWidget {
+  const SearchScreen({super.key});
+  @override
+  State<SearchScreen> createState() => _SearchScreenState();
+}
+class _SearchScreenState extends State<SearchScreen> {
+  String _q = '';
+  final _ctrl = TextEditingController();
+  List<String> _history = [];
+  List<Movie> _all = [];
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+  Future<void> _load() async {
+    _history = await Prefs.searchHistory();
+    _all = await MovieRepo.getAll();
+    if (mounted) setState(() {});
+  }
+  List<Movie> get _results {
+    if (_q.isEmpty) return [];
+    return _all.where((m) => m.title.toLowerCase().contains(_q.toLowerCase()) || m.category.toLowerCase().contains(_q.toLowerCase())).toList();
+  }
+  Future<void> _open(Movie m) async {
+    await Prefs.addSearch(_q.isEmpty ? m.title : _q);
+    if (!mounted) return;
+    Navigator.push(context, MaterialPageRoute(builder: (_) => DetailsScreen(movie: m)));
+  }
+  @override
+  Widget build(BuildContext context) {
+    final results = _results;
+    final popular = [..._all]..sort((a, b) => b.rating.compareTo(a.rating));
+    return Scaffold(
+      appBar: AppBar(
+        title: TextField(
+          controller: _ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'Title / Actor / Director', border: InputBorder.none, hintStyle: TextStyle(color: kGrey)),
+          onChanged: (v) => setState(() => _q = v),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: Colors.white)))],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (_q.isEmpty) ...[
+            Row(children: [
+              const Expanded(child: Text('Search History', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+              IconButton(icon: const Icon(Icons.delete_outline, color: kGrey), onPressed: () async { await Prefs.clearSearch(); _load(); }),
+            ]),
+            const SizedBox(height: 8),
+            if (_history.isEmpty)
+              const Text('Nothing searched yet', style: TextStyle(color: kGrey))
+            else
+              Wrap(spacing: 8, runSpacing: 8, children: _history.map((h) => InputChip(
+                label: Text(h), backgroundColor: kCard2,
+                deleteIcon: const Icon(Icons.close, size: 16),
+                onDeleted: () async { await Prefs.removeSearch(h); _load(); },
+                onPressed: () { _ctrl.text = h; setState(() => _q = h); },
+              )).toList()),
+            const SizedBox(height: 24),
+            const Text('Popular Searches', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            ...popular.take(7).map((m) => ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(m.posterUrl, width: 50, height: 70, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(width: 50, height: 70, color: kCard2))),
+              title: Row(children: [Expanded(child: Text(m.title)), Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: m.rating >= 8.5 ? Colors.red : Colors.orange.shade200, borderRadius: BorderRadius.circular(4)), child: Text(m.rating >= 8.5 ? 'HOT' : 'TOP', style: const TextStyle(fontSize: 11, color: Colors.black, fontWeight: FontWeight.bold)))]),
+              subtitle: Text(m.category),
+              trailing: IconButton(icon: const Icon(Icons.play_arrow, color: Colors.white), onPressed: () => _open(m)),
+              onTap: () => _open(m),
+            )),
+          ] else ...[
+            if (results.isEmpty) ...[
+              Text('No exact match for "$_q"', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              const Text('Related movies you may like:', style: TextStyle(color: kGrey)),
+              const SizedBox(height: 12),
+              GridView.builder(
+                shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.62, crossAxisSpacing: 8, mainAxisSpacing: 12),
+                itemCount: popular.length,
+                itemBuilder: (context, i) => MovieCard(movie: popular[i], width: double.infinity),
+              ),
+            ] else
+              GridView.builder(
+                shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.62, crossAxisSpacing: 8, mainAxisSpacing: 12),
+                itemCount: results.length,
+                itemBuilder: (context, i) => MovieCard(movie: results[i], width: double.infinity),
+              ),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
+// ---------------- DETAILS ----------------
+class DetailsScreen extends StatefulWidget {
+  final Movie movie;
+  const DetailsScreen({super.key, required this.movie});
+  @override
+  State<DetailsScreen> createState() => _DetailsScreenState();
+}
+class _DetailsScreenState extends State<DetailsScreen> {
+  bool _fav = false;
+  @override
+  void initState() {
+    super.initState();
+    _loadFav();
+  }
+  Future<void> _loadFav() async {
+    final p = await SharedPreferences.getInstance();
+    setState(() => _fav = (p.getStringList('favorites') ?? []).contains(widget.movie.id));
+  }
+  Future<void> _toggleFav() async {
+    final p = await SharedPreferences.getInstance();
+    final list = p.getStringList('favorites') ?? [];
+    if (list.contains(widget.movie.id)) { list.remove(widget.movie.id); } else { list.add(widget.movie.id); }
+    await p.setStringList('favorites', list);
+    setState(() => _fav = !_fav);
+  }
+  Future<void> _download() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/flix_${widget.movie.id}.mp4');
+      await Dio().download(widget.movie.videoUrl, file.path);
+      final p = await SharedPreferences.getInstance();
+      final list = p.getStringList('downloaded') ?? [];
+      if (!list.contains(widget.movie.id)) list.add(widget.movie.id);
+      await p.setStringList('downloaded', list);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Downloaded. Find it in Me > My download.')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: $e')));
+    }
+  }
+  @override
+  Widget build(BuildContext context) {
+    final m = widget.movie;
+    return Scaffold(
+      appBar: AppBar(title: Text(m.title)),
+      body: SingleChildScrollView(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Image.network(m.posterUrl, width: double.infinity, height: 380, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(height: 380, color: kCard2)),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(m.title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Row(children: [const Icon(Icons.star, color: Colors.amber, size: 18), Text(' ${m.rating}   '), Text('${m.year}  •  ${m.category}  •  ${m.language}  •  ${m.type}')]),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(backgroundColor: kRed, padding: const EdgeInsets.symmetric(vertical: 14)),
+                  onPressed: () async {
+                    final hist = await getWatchHistory();
+                    final entry = hist.where((e) => e.movieId == m.id).toList();
+                    final start = entry.isEmpty ? 0 : entry.first.position;
+                    if (!context.mounted) return;
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(movie: m, startAt: start)));
+                  },
+                  icon: const Icon(Icons.play_arrow), label: const Text('Watch Now', style: TextStyle(fontSize: 16)),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(children: [
+                Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? 'Saved' : 'Favorite'))),
+                const SizedBox(width: 10),
+                Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: const Text('Download'))),
+              ]),
+              const SizedBox(height: 20),
+              const Text('Description', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Text(m.description, style: const TextStyle(color: Colors.white70, height: 1.5)),
+              if (m.type == 'TV Show') ...[
+                const SizedBox(height: 20),
+                const Text('Episodes', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                ...List.generate(3, (i) => ListTile(
+                  leading: const Icon(Icons.play_circle_fill, color: kRed),
+                  title: Text('Episode ${i + 1}'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(movie: m, startAt: 0))),
+                )),
+              ],
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ---------------- PLAYER: FULLSCREEN, +/-10s, QUALITY ----------------
+class PlayerScreen extends StatefulWidget {
+  final Movie movie; final int startAt;
+  const PlayerScreen({super.key, required this.movie, this.startAt = 0});
+  @override
+  State<PlayerScreen> createState() => _PlayerScreenState();
+}
+class _PlayerScreenState extends State<PlayerScreen> {
+  VideoPlayerController? _c;
+  bool _showControls = true;
+  String _quality = 'Auto';
+  @override
+  void initState() {
+    super.initState();
+    SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
+    _init(widget.movie.videoUrl);
+  }
+  Future<void> _init(String url) async {
+    final old = _c; await old?.dispose();
+    final c = VideoPlayerController.networkUrl(Uri.parse(url));
+    await c.initialize();
+    if (widget.startAt > 0) await c.seekTo(Duration(seconds: widget.startAt));
+    c.play();
+    c.addListener(() { if (mounted) setState(() {}); });
+    setState(() => _c = c);
+  }
+  @override
+  void dispose() {
+    final c = _c;
+    if (c != null && c.value.isInitialized) {
+      saveWatchPosition(widget.movie.id, c.value.position.inSeconds, c.value.duration.inSeconds);
+    }
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    c?.dispose();
+    super.dispose();
+  }
+  void _seek(int seconds) {
+    final c = _c; if (c == null) return;
+    final target = c.value.position + Duration(seconds: seconds);
+    c.seekTo(target < Duration.zero ? Duration.zero : target);
+  }
+  @override
+  Widget build(BuildContext context) {
+    final c = _c;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onTap: () => setState(() => _showControls = !_showControls),
+        child: Stack(children: [
+          Center(child: c == null || !c.value.isInitialized ? const CircularProgressIndicator(color: kRed) : AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c))),
+          if (_showControls && c != null && c.value.isInitialized) ...[
+            Positioned(top: 16, left: 12, child: Row(children: [
+              IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
+              Expanded(child: Text(widget.movie.title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.settings, color: Colors.white),
+                onSelected: (q) {
+                  setState(() => _quality = q);
+                  if (q != 'Auto' && widget.movie.qualities.containsKey(q)) {
+                    final pos = c.value.position.inSeconds;
+                    _init(widget.movie.qualities[q]!).then((_) => _c?.seekTo(Duration(seconds: pos)));
+                  }
+                },
+                itemBuilder: (_) => ['Auto', ...widget.movie.qualities.keys].map((q) => PopupMenuItem(value: q, child: Text(q))).toList(),
+              ),
+            ])),
+            Center(
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                IconButton(iconSize: 44, icon: const Icon(Icons.replay_10, color: Colors.white), onPressed: () => _seek(-10)),
+                const SizedBox(width: 20),
+                IconButton(iconSize: 64, icon: Icon(c.value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled, color: Colors.white), onPressed: () => c.value.isPlaying ? c.pause() : c.play()),
+                const SizedBox(width: 20),
+                IconButton(iconSize: 44, icon: const Icon(Icons.forward_10, color: Colors.white), onPressed: () => _seek(10)),
+              ]),
+            ),
+            Positioned(bottom: 12, left: 16, right: 16, child: Row(children: [
+              Text(fmtTime(c.value.position.inSeconds), style: const TextStyle(color: Colors.white)),
+              Expanded(child: Slider(
+                value: c.value.position.inSeconds.toDouble().clamp(0, c.value.duration.inSeconds.toDouble()),
+                max: c.value.duration.inSeconds.toDouble() == 0 ? 1 : c.value.duration.inSeconds.toDouble(),
+                activeColor: kRed,
+                onChanged: (v) => c.seekTo(Duration(seconds: v.toInt())),
+              )),
+              Text(fmtTime(c.value.duration.inSeconds), style: const TextStyle(color: Colors.white)),
+              const SizedBox(width: 8),
+              Text(_quality, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ])),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
+// ---------------- ME (avatar = admin unlock, NO adult / game / network test) ----------------
+class MeScreen extends StatefulWidget {
+  const MeScreen({super.key});
+  @override
+  State<MeScreen> createState() => _MeScreenState();
+}
+class _MeScreenState extends State<MeScreen> {
+  String _username = '...';
+  int _taps = 0;
+  @override
+  void initState() { super.initState(); Prefs.username().then((u) { if (mounted) setState(() => _username = u); }); }
+  void _onAvatarTap() {
+    _taps++;
+    if (_taps >= 5) {
+      _taps = 0;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Admin panel unlocked')));
+      Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminScreen()));
+    }
+  }
+  Widget _tile(IconData icon, String title, VoidCallback onTap) => ListTile(
+    leading: Icon(icon, color: kGrey), title: Text(title),
+    trailing: const Icon(Icons.chevron_right, color: kGrey), onTap: onTap,
+  );
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SingleChildScrollView(
+        child: Column(children: [
+          const SizedBox(height: 16),
+          // Default avatar - cannot be changed. Tap it 5 times to open Admin.
+          GestureDetector(
+            onTap: _onAvatarTap,
+            child: const CircleAvatar(radius: 40, backgroundColor: kCard2, child: Icon(Icons.person, size: 44, color: kGrey)),
+          ),
+          const SizedBox(height: 8),
+          Text(_username, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('Movie', style: TextStyle(color: kGrey)),
+          const SizedBox(height: 16),
+          // VIP banner
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFFE8C88A), Color(0xFFD9A86A)]), borderRadius: BorderRadius.circular(12)),
+              child: Row(children: [
+                const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Join VIP and enjoy ad-free viewing of all videos', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  Text('40%+ discount currently!', style: TextStyle(color: Colors.black54)),
+                ])),
+                ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.white), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VipScreen())), child: const Text('Subscribe', style: TextStyle(color: Colors.black))),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 16),
+          _tile(Icons.share, 'Share', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ShareScreen()))),
+          _tile(Icons.language, 'Language Switching', () async {
+            final lang = await showDialog<String>(context: context, builder: (_) => SimpleDialog(title: const Text('Choose language'), children: ['English', 'Hindi', 'Tamil', 'Telugu', 'Malayalam'].map((l) => SimpleDialogOption(child: Text(l), onPressed: () => Navigator.pop(context, l))).toList()));
+            if (lang != null && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Language set to $lang')));
+          }),
+          _tile(Icons.history, 'History', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()))),
+          _tile(Icons.download, 'My download', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DownloadsScreen()))),
+          _tile(Icons.favorite_border, 'My Favorites', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FavoritesScreen()))),
+          _tile(Icons.receipt_long, 'Order list', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VipScreen()))),
+          _tile(Icons.feedback_outlined, 'Feedback', () {
+            showDialog(context: context, builder: (_) => AlertDialog(title: const Text('Feedback'), content: const TextField(decoration: InputDecoration(hintText: 'Tell us what to improve...')), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Send'))]));
+          }),
+          _tile(Icons.support_agent, 'Official customer service', () {
+            showDialog(context: context, builder: (_) => const AlertDialog(title: Text('Customer Service'), content: Text('Email us from the address you used for Flix. Support replies within 1-2 working days.')));
+          }),
+        ]),
+      ),
+    );
+  }
+}
+
+// ---------------- HISTORY / CONTINUE WATCHING ----------------
+class HistoryScreen extends StatefulWidget {
+  const HistoryScreen({super.key});
+  @override
+  State<HistoryScreen> createState() => _HistoryScreenState();
+}
+class _HistoryScreenState extends State<HistoryScreen> {
+  List<Movie> _movies = [];
+  List<WatchEntry> _entries = [];
+  @override
+  void initState() { super.initState(); _load(); }
+  Future<void> _load() async {
+    _movies = await MovieRepo.getAll();
+    _entries = await getWatchHistory();
+    if (mounted) setState(() {});
+  }
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('History'), actions: [IconButton(icon: const Icon(Icons.edit), onPressed: () async { final p = await SharedPreferences.getInstance(); await p.remove('watch_history'); _load(); })]),
+      body: _entries.isEmpty
+          ? const Center(child: Text('No watch history yet.\nPlay a movie and it will appear here.', textAlign: TextAlign.center, style: TextStyle(color: kGrey)))
+          : ListView.builder(
+              itemCount: _entries.length,
+              itemBuilder: (context, i) {
+                final e = _entries[i];
+                final m = _movies.where((x) => x.id == e.movieId).toList();
+                if (m.isEmpty) return const SizedBox.shrink();
+                final movie = m.first;
+                final remaining = (e.duration - e.position).clamp(0, e.duration);
+                return ListTile(
+                  leading: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(movie.posterUrl, width: 60, height: 85, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(width: 60, height: 85, color: kCard2))),
+                  title: Text(movie.title),
+                  subtitle: Text('Remaining ${fmtTime(remaining)}', style: const TextStyle(color: Colors.red)),
+                  trailing: IconButton(icon: const Icon(Icons.delete_outline, color: kGrey), onPressed: () async { await removeWatch(e.movieId); _load(); }),
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(movie: movie, startAt: e.position))),
+                );
+              },
+            ),
+    );
+  }
+}
+
+// ---------------- DOWNLOADS ----------------
+class DownloadsScreen extends StatefulWidget {
+  const DownloadsScreen({super.key});
+  @override
+  State<DownloadsScreen> createState() => _DownloadsScreenState();
+}
+class _DownloadsScreenState extends State<DownloadsScreen> {
+  List<Movie> _movies = [];
+  List<String> _downloaded = [];
+  @override
+  void initState() { super.initState(); _load(); }
+  Future<void> _load() async {
+    _movies = await MovieRepo.getAll();
+    final p = await SharedPreferences.getInstance();
+    _downloaded = p.getStringList('downloaded') ?? [];
+    if (mounted) setState(() {});
+  }
+  @override
+  Widget build(BuildContext context) {
+    final downloadedMovies = _movies.where((m) => _downloaded.contains(m.id)).toList();
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(title: const Text('My download'), actions: [TextButton(onPressed: () {}, child: const Text('Edit', style: TextStyle(color: Colors.white)) )], bottom: const TabBar(tabs: [Tab(text: 'Downloading'), Tab(text: 'Downloaded')])),
+        body: TabBarView(children: [
+          const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.movie, size: 64, color: kGrey), SizedBox(height: 12), Text('No Content yet', style: TextStyle(color: kGrey))])),
+          downloadedMovies.isEmpty
+              ? const Center(child: Text('No downloaded movies yet.\nTap Download on a movie details page.', textAlign: TextAlign.center, style: TextStyle(color: kGrey)))
+              : ListView.builder(itemCount: downloadedMovies.length, itemBuilder: (context, i) {
+                  final m = downloadedMovies[i];
+                  return ListTile(
+                    leading: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(m.posterUrl, width: 60, height: 85, fit: BoxFit.cover)),
+                    title: Text(m.title), subtitle: const Text('Downloaded • Tap to play offline'),
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DetailsScreen(movie: m))),
+                  );
+                }),
+        ]),
+      ),
+    );
+  }
+}
+
+class FavoritesScreen extends StatelessWidget {
+  const FavoritesScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('My Favorites')),
+      body: FutureBuilder<List<Movie>>(
+        future: MovieRepo.getAll(),
+        builder: (context, snap) {
+          if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: kRed));
+          return FutureBuilder<List<String>>(
+            future: SharedPreferences.getInstance().then((p) => p.getStringList('favorites') ?? []),
+            builder: (context, favSnap) {
+              final favs = snap.data!.where((m) => (favSnap.data ?? []).contains(m.id)).toList();
+              if (favs.isEmpty) return const Center(child: Text('No favorites yet.', style: TextStyle(color: kGrey)));
+              return GridView.builder(padding: const EdgeInsets.all(12), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.62, crossAxisSpacing: 8, mainAxisSpacing: 12), itemCount: favs.length, itemBuilder: (context, i) => MovieCard(movie: favs[i], width: double.infinity));
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ---------------- VIP ----------------
+class VipScreen extends StatefulWidget {
+  const VipScreen({super.key});
+  @override
+  State<VipScreen> createState() => _VipScreenState();
+}
+class _VipScreenState extends State<VipScreen> {
+  int _selected = 2; // 6 Months default, like screenshot
+  final _plans = [
+    ('1 Month', 110, 200), ('3 Months', 300, 600),
+    ('6 Months', 520, 1200), ('12 Months', 920, 2400),
+  ];
+  @override
+  Widget build(BuildContext context) {
+    final plan = _plans[_selected];
+    return Scaffold(
+      appBar: AppBar(title: const Text('Payment')),
+      body: Column(children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFFE8C88A), Color(0xFFD9A86A)]), borderRadius: BorderRadius.circular(16)),
+                child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Center(child: Text('VIP benefits', style: TextStyle(color: Colors.brown, fontSize: 20, fontWeight: FontWeight.bold))),
+                  SizedBox(height: 16),
+                  Text('✓  Exempt video ads on the home page, play, download and pause.', style: TextStyle(color: Colors.brown)),
+                  SizedBox(height: 8),
+                  Text('✓  Unlimited download opportunities', style: TextStyle(color: Colors.brown)),
+                  SizedBox(height: 8),
+                  Text('✓  More than 5 million HD movie resources', style: TextStyle(color: Colors.brown)),
+                ]),
+              ),
+              const SizedBox(height: 16),
+              GridView.builder(
+                shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 1.4, crossAxisSpacing: 12, mainAxisSpacing: 12),
+                itemCount: _plans.length,
+                itemBuilder: (context, i) {
+                  final p = _plans[i];
+                  final sel = i == _selected;
+                  return GestureDetector(
+                    onTap: () => setState(() => _selected = i),
+                    child: Container(
+                      decoration: BoxDecoration(color: sel ? Colors.white : const Color(0xFF1E2A4A), borderRadius: BorderRadius.circular(12)),
+                      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Text(p.$1, style: TextStyle(color: sel ? Colors.brown : Colors.white)),
+                        Text('₹ ${p.$2}.00', style: TextStyle(color: Colors.orange.shade700, fontSize: 20, fontWeight: FontWeight.bold)),
+                        Text('₹${p.$3}.00', style: TextStyle(color: sel ? Colors.grey : Colors.white54, decoration: TextDecoration.lineThrough)),
+                      ]),
+                    ),
+                  );
+                },
+              ),
+            ]),
+          ),
+        ),
+        Container(
+          color: Colors.white,
+          child: Row(children: [
+            Expanded(child: Padding(padding: const EdgeInsets.all(16), child: Text('₹ ${plan.$2}.00   ${plan.$1}', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 18)))),
+            GestureDetector(
+              onTap: () async {
+                final p = await SharedPreferences.getInstance();
+                await p.setString('vip_plan', plan.$1);
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${plan.$1} VIP selected (demo - connect a real payment gateway for live payments)')));
+              },
+              child: Container(color: Colors.orange, padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 20), child: const Text('Next', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+// ---------------- SHARE / PROMOTION ----------------
+class ShareScreen extends StatefulWidget {
+  const ShareScreen({super.key});
+  @override
+  State<ShareScreen> createState() => _ShareScreenState();
+}
+class _ShareScreenState extends State<ShareScreen> {
+  String _username = '';
+  int _invited = 0;
+  @override
+  void initState() { super.initState(); _load(); }
+  Future<void> _load() async {
+    _username = await Prefs.username();
+    _invited = await Prefs.invitedCount();
+    if (mounted) setState(() {});
+  }
+  @override
+  Widget build(BuildContext context) {
+    final days = Prefs.adFreeDays(_invited);
+    return Scaffold(
+      appBar: AppBar(title: const Text('Promotion'), actions: [TextButton(onPressed: () {}, child: const Text('Promotion record', style: TextStyle(color: Colors.white)))]),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(color: kCard2, borderRadius: BorderRadius.circular(16)),
+            child: Column(children: [
+              Text('Promoted $_invited person', style: const TextStyle(fontSize: 18)),
+              Text('You have $days days ad-free', style: const TextStyle(color: kGrey)),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(16), color: Colors.white,
+                child: Column(children: [
+                  const Icon(Icons.qr_code_2, size: 120, color: Colors.black),
+                  Text('My invitation code: ${_username.toUpperCase()}', style: const TextStyle(color: Colors.grey)),
+                ]),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: kRed, padding: const EdgeInsets.symmetric(vertical: 14)),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: 'Join Flix with my code ${_username.toUpperCase()}'));
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invitation code copied. Share it with a friend.')));
+                  },
+                  child: const Text('Share now'),
+                ),
+              ),
+              TextButton(onPressed: () async { await Prefs.addInvite(); _load(); }, child: const Text('Demo: mark 1 friend as joined', style: TextStyle(color: kGrey))),
+            ]),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(color: kCard2, borderRadius: BorderRadius.circular(16)),
+            child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Center(child: Text('Promotion Description', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+              SizedBox(height: 12),
+              Text('1. For every successful promotion of 1 person, 3 days of free advertising will be given, which can be stacked infinitely~'),
+              SizedBox(height: 10),
+              Text('2. A total of 3 people have been promoted, and an extra 5 days of free advertising~'),
+              SizedBox(height: 10),
+              Text('3. A total of 5 people have been promoted, and an extra 10 days of free advertising~'),
+              SizedBox(height: 10),
+              Text('4. A total of 7 people have been promoted, and an extra 15 days of free advertising~'),
+              SizedBox(height: 10),
+              Text('5. A total of 10 people have been promoted, and an extra 3650 days of free advertising~'),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ---------------- ADMIN PANEL (hidden: tap Me avatar 5 times) ----------------
+// In production, protect this with Firebase Auth: only allow a fixed admin UID.
+// For now it is hidden, not public - there is no Admin button in the bottom bar.
+class AdminScreen extends StatefulWidget {
+  const AdminScreen({super.key});
+  @override
+  State<AdminScreen> createState() => _AdminScreenState();
+}
+class _AdminScreenState extends State<AdminScreen> {
+  final _title = TextEditingController();
+  final _desc = TextEditingController();
+  final _year = TextEditingController(text: '2025');
+  final _lang = TextEditingController(text: 'Hindi');
+  final _rating = TextEditingController(text: '8.0');
+  final _poster = TextEditingController();
+  final _video = TextEditingController();
+  final _q720 = TextEditingController();
+  final _q1080 = TextEditingController();
+  String _category = 'Action';
+  String _type = 'Movie';
+  bool _trending = false;
+  List<Movie> _movies = [];
+  final _categories = ['Action', 'Romance', 'Thriller', 'Adventure', 'Horror', 'Family', 'Comedy', 'Drama'];
+
+  @override
+  void initState() { super.initState(); _load(); }
+  Future<void> _load() async { _movies = await MovieRepo.getAll(); if (mounted) setState(() {}); }
+
+  Widget _field(TextEditingController c, String label) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: TextField(controller: c, decoration: InputDecoration(labelText: label, border: const OutlineInputBorder())),
+  );
+
+  Future<void> _addMovie() async {
+    if (_title.text.isEmpty || _video.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Title and Video link are required')));
+      return;
+    }
+    final qualities = <String, String>{};
+    if (_q720.text.isNotEmpty) qualities['720p'] = _q720.text;
+    if (_q1080.text.isNotEmpty) qualities['1080p'] = _q1080.text;
+    final m = Movie(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      title: _title.text, description: _desc.text, category: _category,
+      language: _lang.text, posterUrl: _poster.text, videoUrl: _video.text,
+      type: _type, year: int.tryParse(_year.text) ?? 2025,
+      rating: double.tryParse(_rating.text) ?? 8.0, isTrending: _trending, qualities: qualities,
+    );
+    await MovieRepo.addMovie(m);
+    _title.clear(); _desc.clear(); _poster.clear(); _video.clear(); _q720.clear(); _q1080.clear();
+    setState(() => _trending = false);
+    _load();
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Movie added. It will now appear on Home / Categories.')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final trendingCount = _movies.where((m) => m.isTrending).length;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Admin Panel')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Add Movie / Web Series', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          const Text('Video link = YOUR hosted video link (Firebase Storage / your server). Only add videos you own or have a licence for.', style: TextStyle(color: kGrey, fontSize: 12)),
+          const SizedBox(height: 12),
+          _field(_title, 'Title'),
+          _field(_desc, 'Description'),
+          Row(children: [
+            Expanded(child: DropdownButtonFormField<String>(value: _category, decoration: const InputDecoration(labelText: 'Category (sort by)', border: OutlineInputBorder()), items: _categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(), onChanged: (v) => setState(() => _category = v!))),
+            const SizedBox(width: 10),
+            Expanded(child: DropdownButtonFormField<String>(value: _type, decoration: const InputDecoration(labelText: 'Type', border: OutlineInputBorder()), items: const [DropdownMenuItem(value: 'Movie', child: Text('Movie')), DropdownMenuItem(value: 'TV Show', child: Text('TV Show'))], onChanged: (v) => setState(() => _type = v!))),
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [Expanded(child: _field(_year, 'Year')), const SizedBox(width: 10), Expanded(child: _field(_lang, 'Language')), const SizedBox(width: 10), Expanded(child: _field(_rating, 'Rating'))]),
+          _field(_poster, 'Poster image link'),
+          _field(_video, 'Video link (movie website / hosted video link)'),
+          _field(_q720, 'Quality 720p link (optional)'),
+          _field(_q1080, 'Quality 1080p link (optional)'),
+          SwitchListTile(title: const Text('Add to Trending (max 5)'), value: _trending, activeColor: kRed, onChanged: (v) => setState(() => _trending = v)),
+          SizedBox(width: double.infinity, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, padding: const EdgeInsets.symmetric(vertical: 14)), onPressed: _addMovie, child: const Text('Add Movie'))),
+          const SizedBox(height: 24),
+          Text('Trending Movies ($trendingCount / 5) - tap star to add / remove', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          ..._movies.map((m) => ListTile(
+            leading: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(m.posterUrl, width: 40, height: 60, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(width: 40, height: 60, color: kCard2))),
+            title: Text(m.title), subtitle: Text('${m.category} • ${m.year}'),
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              IconButton(icon: Icon(m.isTrending ? Icons.star : Icons.star_border, color: m.isTrending ? Colors.amber : kGrey), onPressed: () async {
+                var ids = _movies.where((x) => x.isTrending).map((x) => x.id).toList();
+                if (m.isTrending) { ids.remove(m.id); } else {
+                  if (ids.length >= 5) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Trending is full - remove one first (max 5)'))); return; }
+                  ids.add(m.id);
+                }
+                await MovieRepo.setTrending(ids); _load();
+              }),
+              IconButton(icon: const Icon(Icons.delete_outline, color: Colors.red), onPressed: () async { await MovieRepo.deleteMovie(m.id); _load(); }),
+            ]),
+          )),
+        ]),
+      ),
+    );
+  }
+}
+&
