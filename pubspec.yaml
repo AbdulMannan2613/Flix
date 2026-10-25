@@ -1,0 +1,25 @@
+name: flix
+description: "Flix - Stream Unlimited Movies & TV Shows"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  firebase_core: ^3.8.0
+  cloud_firestore: ^5.5.0
+  video_player: ^2.9.5
+  shared_preferences: ^2.2.2
+  path_provider: ^2.1.2
+  dio: ^5.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
