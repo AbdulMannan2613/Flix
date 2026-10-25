@@ -431,7 +431,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              Row(mainAxisAlignment: MainAxisAlignment.center, children: List.generate(slider.length, (i) => Container(margin: const EdgeInsets.symmetric(horizontal: 3), width: _pageIndex == i ? 18 : 7, height: 7, decoration: BoxDecoration(color: _pageIndex == i ? kRed : Colors.white54, borderRadius: BorderRadius.circular(4))))),
+              Row(mainAxisAlignment: MainAxisAlignment.center, children: List.generate(slider.length, (i) => Container(margin: const EdgeInsets.symmetric(horizontal: 3), width: _pageIndex == i ? 18.0 : 7.0, height: 7, decoration: BoxDecoration(color: _pageIndex == i ? kRed : Colors.white54, borderRadius: BorderRadius.circular(4))))),
               const SizedBox(height: 20),
               const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('Popular Movies', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
               const SizedBox(height: 10),
@@ -809,8 +809,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Positioned(bottom: 12, left: 16, right: 16, child: Row(children: [
               Text(fmtTime(c.value.position.inSeconds), style: const TextStyle(color: Colors.white)),
               Expanded(child: Slider(
-                value: c.value.position.inSeconds.toDouble().clamp(0, c.value.duration.inSeconds.toDouble()),
-                max: c.value.duration.inSeconds.toDouble() == 0 ? 1 : c.value.duration.inSeconds.toDouble(),
+                value: c.value.position.inSeconds.toDouble().clamp(0.0, c.value.duration.inSeconds.toDouble()).toDouble(),
+                max: c.value.duration.inSeconds.toDouble() == 0 ? 1.0 : c.value.duration.inSeconds.toDouble(),
                 activeColor: kRed,
                 onChanged: (v) => c.seekTo(Duration(seconds: v.toInt())),
               )),
@@ -929,7 +929,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 final m = _movies.where((x) => x.id == e.movieId).toList();
                 if (m.isEmpty) return const SizedBox.shrink();
                 final movie = m.first;
-                final remaining = (e.duration - e.position).clamp(0, e.duration);
+                final remaining = (e.duration - e.position).clamp(0, e.duration).toInt();
                 return ListTile(
                   leading: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(movie.posterUrl, width: 60, height: 85, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(width: 60, height: 85, color: kCard2))),
                   title: Text(movie.title),
@@ -1268,4 +1268,3 @@ class _AdminScreenState extends State<AdminScreen> {
     );
   }
 }
-&
