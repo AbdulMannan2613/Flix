@@ -15,6 +15,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 
@@ -59,11 +60,14 @@ class Movie {
   final double rating;
   final bool isTrending;
   final Map<String, String> qualities;
+  // Episode video links for TV Show / Web Series. Empty = single video (Movie).
+  final List<String> episodes;
   Movie({
     required this.id, required this.title, required this.description,
     required this.category, required this.language, required this.posterUrl,
     required this.videoUrl, required this.type, required this.year,
     required this.rating, this.isTrending = false, this.qualities = const {},
+    this.episodes = const [],
   });
   factory Movie.fromMap(String id, Map<String, dynamic> m) => Movie(
     id: id,
@@ -78,12 +82,13 @@ class Movie {
     rating: ((m['rating'] ?? 7.0) as num).toDouble(),
     isTrending: m['isTrending'] ?? false,
     qualities: Map<String, String>.from(m['qualities'] ?? {}),
+    episodes: List<String>.from(m['episodes'] ?? []),
   );
   Map<String, dynamic> toMap() => {
     'title': title, 'description': description, 'category': category,
     'language': language, 'posterUrl': posterUrl, 'videoUrl': videoUrl,
     'type': type, 'year': year, 'rating': rating, 'isTrending': isTrending,
-    'qualities': qualities,
+    'qualities': qualities, 'episodes': episodes,
   };
 }
 
@@ -100,6 +105,7 @@ List<Movie> sampleMovies() {
     Movie(id: 's6', title: 'Family Reunion', description: 'A warm family drama about coming home after many years.', category: 'Family', language: 'Hindi', posterUrl: p('flix6'), videoUrl: v2, type: 'Movie', year: 2024, rating: 8.0),
     Movie(id: 's7', title: 'Space Voyage', description: 'A crew travels beyond the stars to find a new home.', category: 'Action', language: 'English', posterUrl: p('flix7'), videoUrl: v, type: 'TV Show', year: 2026, rating: 9.1),
     Movie(id: 's8', title: 'Comedy Nights', description: 'Non-stop comedy from a group of friends who always get into trouble.', category: 'Comedy', language: 'Hindi', posterUrl: p('flix8'), videoUrl: v2, type: 'TV Show', year: 2025, rating: 7.7),
+    Movie(id: 's9', title: 'River Valley', description: 'A web series about a small town, a big secret, and the people caught in between.', category: 'Drama', language: 'Hindi', posterUrl: p('flix9'), videoUrl: v, type: 'Web Series', year: 2026, rating: 8.4, isTrending: true, episodes: [v, v2, 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4']),
   ];
 }
 
@@ -166,6 +172,7 @@ class MovieRepo {
       language: m.language, posterUrl: m.posterUrl, videoUrl: m.videoUrl,
       type: m.type, year: m.year, rating: m.rating,
       isTrending: trendingIds.contains(m.id), qualities: m.qualities,
+      episodes: m.episodes,
     )).toList();
     await saveLocal(updated);
     try {
@@ -207,6 +214,15 @@ class Prefs {
       await p.setString('username', u);
     }
     return u;
+  }
+  // Admin PIN: default 1234. The admin can change it inside the Admin panel.
+  static Future<String> adminPin() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString('admin_pin') ?? '1234';
+  }
+  static Future<void> setAdminPin(String pin) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString('admin_pin', pin);
   }
   static Future<int> invitedCount() async {
     final p = await SharedPreferences.getInstance();
@@ -461,10 +477,12 @@ class CategoriesScreen extends StatefulWidget {
 }
 class _CategoriesScreenState extends State<CategoriesScreen> {
   String _type = 'Movies';
-  String _genre = 'All';
+  // Multi-select genres: user can pick more than one (e.g. Action + Romance).
+  // Empty set = All genres.
+  final Set<String> _genresSelected = {};
   String _year = 'All';
   String _sort = 'Popularity';
-  final _genres = ['All', 'Adventure', 'Romance', 'Horror', 'Family', 'Action', 'Thriller', 'Comedy', 'Drama'];
+  final _genres = ['Adventure', 'Romance', 'Horror', 'Family', 'Action', 'Thriller', 'Comedy', 'Drama'];
   final _years = ['All', '2026', '2025', '2024', '2023', '2022'];
   final _sorts = ['Popularity', 'Latest', 'Top today'];
 
@@ -480,6 +498,34 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           onSelected: (_) => setState(() => onPick(e)),
         ),
       )).toList()),
+    );
+  }
+
+  Widget _genreChips() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: [
+        Padding(
+          padding: const EdgeInsets.only(right: 10),
+          child: FilterChip(
+            label: const Text('All'), selected: _genresSelected.isEmpty,
+            selectedColor: kCard2, backgroundColor: Colors.transparent,
+            labelStyle: TextStyle(color: _genresSelected.isEmpty ? Colors.white : kGrey, fontWeight: _genresSelected.isEmpty ? FontWeight.bold : FontWeight.normal),
+            onSelected: (_) => setState(() => _genresSelected.clear()),
+          ),
+        ),
+        ..._genres.map((e) => Padding(
+          padding: const EdgeInsets.only(right: 10),
+          child: FilterChip(
+            label: Text(e), selected: _genresSelected.contains(e),
+            selectedColor: kCard2, backgroundColor: Colors.transparent,
+            labelStyle: TextStyle(color: _genresSelected.contains(e) ? Colors.white : kGrey, fontWeight: _genresSelected.contains(e) ? FontWeight.bold : FontWeight.normal),
+            onSelected: (_) => setState(() {
+              if (_genresSelected.contains(e)) { _genresSelected.remove(e); } else { _genresSelected.add(e); }
+            }),
+          ),
+        )),
+      ]),
     );
   }
 
@@ -501,9 +547,11 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
               ChoiceChip(label: const Text('Movies'), selected: _type == 'Movies', selectedColor: kCard2, onSelected: (_) => setState(() => _type = 'Movies')),
               const SizedBox(width: 10),
               ChoiceChip(label: const Text('TV Shows'), selected: _type == 'TV Shows', selectedColor: kCard2, onSelected: (_) => setState(() => _type = 'TV Shows')),
+              const SizedBox(width: 10),
+              ChoiceChip(label: const Text('Web Series'), selected: _type == 'Web Series', selectedColor: kCard2, onSelected: (_) => setState(() => _type = 'Web Series')),
             ]),
             const SizedBox(height: 10),
-            _chips(_genres, _genre, (v) => _genre = v),
+            _genreChips(),
             const SizedBox(height: 10),
             _chips(_years, _year, (v) => _year = v),
             const SizedBox(height: 10),
@@ -516,8 +564,9 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
             future: MovieRepo.getAll(),
             builder: (context, snap) {
               if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: kRed));
-              var list = snap.data!.where((m) => m.type == (_type == 'Movies' ? 'Movie' : 'TV Show')).toList();
-              if (_genre != 'All') list = list.where((m) => m.category == _genre).toList();
+              final wantedType = _type == 'Movies' ? 'Movie' : _type == 'TV Shows' ? 'TV Show' : 'Web Series';
+              var list = snap.data!.where((m) => m.type == wantedType).toList();
+              if (_genresSelected.isNotEmpty) list = list.where((m) => _genresSelected.contains(m.category)).toList();
               if (_year != 'All') list = list.where((m) => m.year.toString() == _year).toList();
               if (_sort == 'Latest') list.sort((a, b) => b.year.compareTo(a.year));
               else list.sort((a, b) => b.rating.compareTo(a.rating)); // Popularity + Top today
@@ -692,7 +741,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(backgroundColor: kRed, padding: const EdgeInsets.symmetric(vertical: 14)),
+                  style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
                   onPressed: () async {
                     final hist = await getWatchHistory();
                     final entry = hist.where((e) => e.movieId == m.id).toList();
@@ -700,7 +749,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                     if (!context.mounted) return;
                     Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(movie: m, startAt: start)));
                   },
-                  icon: const Icon(Icons.play_arrow), label: const Text('Watch Now', style: TextStyle(fontSize: 16)),
+                  icon: const Icon(Icons.play_arrow, color: Colors.white), label: const Text('Watch Now', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
                 ),
               ),
               const SizedBox(height: 10),
@@ -713,14 +762,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
               const Text('Description', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               Text(m.description, style: const TextStyle(color: Colors.white70, height: 1.5)),
-              if (m.type == 'TV Show') ...[
+              if (m.type == 'TV Show' || m.type == 'Web Series') ...[
                 const SizedBox(height: 20),
-                const Text('Episodes', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                ...List.generate(3, (i) => ListTile(
+                Text('Episodes (${m.episodes.isNotEmpty ? m.episodes.length : 3})', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Text('${m.episodes.isNotEmpty ? m.episodes.length : 3} episodes in this ${m.type.toLowerCase()}', style: const TextStyle(color: kGrey)),
+                ...List.generate(m.episodes.isNotEmpty ? m.episodes.length : 3, (i) => ListTile(
                   leading: const Icon(Icons.play_circle_fill, color: kRed),
                   title: Text('Episode ${i + 1}'),
+                  subtitle: Text(m.type),
                   trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(movie: m, startAt: 0))),
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(movie: m, startAt: 0, episodeIndex: i))),
                 )),
               ],
             ]),
@@ -731,10 +783,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 }
 
-// ---------------- PLAYER: FULLSCREEN, +/-10s, QUALITY ----------------
+// ---------------- PLAYER: FULLSCREEN, CENTRE PLAY/PAUSE, DOUBLE-TAP +-10s, QUALITY ----------------
+// No -10 / +10 buttons on screen. Double-tap left side = back 10s,
+// double-tap right side = forward 10s. Centre button = play / pause only.
 class PlayerScreen extends StatefulWidget {
-  final Movie movie; final int startAt;
-  const PlayerScreen({super.key, required this.movie, this.startAt = 0});
+  final Movie movie; final int startAt; final int episodeIndex;
+  const PlayerScreen({super.key, required this.movie, this.startAt = 0, this.episodeIndex = 0});
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
@@ -742,23 +796,55 @@ class _PlayerScreenState extends State<PlayerScreen> {
   VideoPlayerController? _c;
   bool _showControls = true;
   String _quality = 'Auto';
+  late int _episodeIndex;
+  String? _flash;
+  Timer? _flashTimer;
+  bool _advancing = false;
+  List<String> get _episodeUrls => widget.movie.episodes.isNotEmpty ? widget.movie.episodes : [widget.movie.videoUrl];
+  bool get _isSeries => widget.movie.type == 'TV Show' || widget.movie.type == 'Web Series';
   @override
   void initState() {
     super.initState();
+    _episodeIndex = widget.episodeIndex.clamp(0, _episodeUrls.length - 1);
     SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
-    _init(widget.movie.videoUrl);
+    _init(_episodeUrls[_episodeIndex]);
   }
   Future<void> _init(String url) async {
     final old = _c; await old?.dispose();
     final c = VideoPlayerController.networkUrl(Uri.parse(url));
     await c.initialize();
-    if (widget.startAt > 0) await c.seekTo(Duration(seconds: widget.startAt));
+    if (widget.startAt > 0 && _episodeIndex == widget.episodeIndex) await c.seekTo(Duration(seconds: widget.startAt));
     c.play();
-    c.addListener(() { if (mounted) setState(() {}); });
+    c.addListener(() {
+      if (!mounted) return;
+      // When an episode ends, auto-play the next episode if there is one.
+      if (c.value.isInitialized && c.value.duration.inSeconds > 0 &&
+          c.value.position.inSeconds >= c.value.duration.inSeconds &&
+          !c.value.isPlaying && !_advancing) {
+        _playNext(auto: true);
+      }
+      if (mounted) setState(() {});
+    });
     setState(() => _c = c);
+  }
+  Future<void> _playEpisode(int index) async {
+    if (index < 0 || index >= _episodeUrls.length) return;
+    _advancing = true;
+    setState(() => _episodeIndex = index);
+    await _init(_episodeUrls[index]);
+    _advancing = false;
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Playing Episode ${index + 1}'), duration: const Duration(seconds: 2)));
+  }
+  void _playNext({bool auto = false}) {
+    if (_episodeIndex + 1 < _episodeUrls.length) {
+      _playEpisode(_episodeIndex + 1);
+    } else if (!auto && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This is the last episode')));
+    }
   }
   @override
   void dispose() {
+    _flashTimer?.cancel();
     final c = _c;
     if (c != null && c.value.isInitialized) {
       saveWatchPosition(widget.movie.id, c.value.position.inSeconds, c.value.duration.inSeconds);
@@ -771,6 +857,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final c = _c; if (c == null) return;
     final target = c.value.position + Duration(seconds: seconds);
     c.seekTo(target < Duration.zero ? Duration.zero : target);
+    _flashTimer?.cancel();
+    setState(() => _flash = seconds < 0 ? '-10s' : '+10s');
+    _flashTimer = Timer(const Duration(milliseconds: 800), () { if (mounted) setState(() => _flash = null); });
   }
   @override
   Widget build(BuildContext context) {
@@ -779,12 +868,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
       backgroundColor: Colors.black,
       body: GestureDetector(
         onTap: () => setState(() => _showControls = !_showControls),
+        onDoubleTapDown: (details) {
+          // Double-tap left half = back 10s, right half = forward 10s.
+          final width = MediaQuery.of(context).size.width;
+          _seek(details.globalPosition.dx < width / 2 ? -10 : 10);
+          setState(() => _showControls = true);
+        },
         child: Stack(children: [
           Center(child: c == null || !c.value.isInitialized ? const CircularProgressIndicator(color: kRed) : AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c))),
+          if (_flash != null)
+            Center(child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)), child: Text(_flash!, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)))),
           if (_showControls && c != null && c.value.isInitialized) ...[
             Positioned(top: 16, left: 12, child: Row(children: [
               IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
-              Expanded(child: Text(widget.movie.title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
+              Expanded(child: Text(_isSeries ? '${widget.movie.title} • Episode ${_episodeIndex + 1}' : widget.movie.title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
               PopupMenuButton<String>(
                 icon: const Icon(Icons.settings, color: Colors.white),
                 onSelected: (q) {
@@ -798,25 +895,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
               ),
             ])),
             Center(
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                IconButton(iconSize: 44, icon: const Icon(Icons.replay_10, color: Colors.white), onPressed: () => _seek(-10)),
-                const SizedBox(width: 20),
-                IconButton(iconSize: 64, icon: Icon(c.value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled, color: Colors.white), onPressed: () => c.value.isPlaying ? c.pause() : c.play()),
-                const SizedBox(width: 20),
-                IconButton(iconSize: 44, icon: const Icon(Icons.forward_10, color: Colors.white), onPressed: () => _seek(10)),
-              ]),
+              child: IconButton(iconSize: 72, icon: Icon(c.value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled, color: Colors.white), onPressed: () => c.value.isPlaying ? c.pause() : c.play()),
             ),
-            Positioned(bottom: 12, left: 16, right: 16, child: Row(children: [
-              Text(fmtTime(c.value.position.inSeconds), style: const TextStyle(color: Colors.white)),
-              Expanded(child: Slider(
-                value: c.value.position.inSeconds.toDouble().clamp(0.0, c.value.duration.inSeconds.toDouble()).toDouble(),
-                max: c.value.duration.inSeconds.toDouble() == 0 ? 1.0 : c.value.duration.inSeconds.toDouble(),
-                activeColor: kRed,
-                onChanged: (v) => c.seekTo(Duration(seconds: v.toInt())),
-              )),
-              Text(fmtTime(c.value.duration.inSeconds), style: const TextStyle(color: Colors.white)),
-              const SizedBox(width: 8),
-              Text(_quality, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            Positioned(bottom: 12, left: 16, right: 16, child: Column(children: [
+              Row(children: [
+                Text(fmtTime(c.value.position.inSeconds), style: const TextStyle(color: Colors.white)),
+                Expanded(child: Slider(
+                  value: c.value.position.inSeconds.toDouble().clamp(0.0, c.value.duration.inSeconds.toDouble()).toDouble(),
+                  max: c.value.duration.inSeconds.toDouble() == 0 ? 1.0 : c.value.duration.inSeconds.toDouble(),
+                  activeColor: kRed,
+                  onChanged: (v) => c.seekTo(Duration(seconds: v.toInt())),
+                )),
+                Text(fmtTime(c.value.duration.inSeconds), style: const TextStyle(color: Colors.white)),
+                const SizedBox(width: 8),
+                Text(_quality, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              ]),
+              if (_isSeries)
+                Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Text('Episode ${_episodeIndex + 1} of ${_episodeUrls.length}', style: const TextStyle(color: Colors.white70)),
+                  if (_episodeIndex + 1 < _episodeUrls.length) ...[
+                    const SizedBox(width: 12),
+                    TextButton.icon(onPressed: () => _playNext(), icon: const Icon(Icons.skip_next, color: Colors.white, size: 18), label: const Text('Next Episode', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+                  ],
+                ]),
             ])),
           ],
         ]),
@@ -836,12 +937,28 @@ class _MeScreenState extends State<MeScreen> {
   int _taps = 0;
   @override
   void initState() { super.initState(); Prefs.username().then((u) { if (mounted) setState(() => _username = u); }); }
-  void _onAvatarTap() {
+  void _onAvatarTap() async {
     _taps++;
     if (_taps >= 5) {
       _taps = 0;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Admin panel unlocked')));
-      Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminScreen()));
+      // Admin panel is PIN-protected. Default PIN is 1234 (change it in Admin).
+      final pinCtrl = TextEditingController();
+      final entered = await showDialog<String>(context: context, builder: (_) => AlertDialog(
+        title: const Text('Admin PIN'),
+        content: TextField(controller: pinCtrl, obscureText: true, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: 'Enter admin PIN')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, pinCtrl.text), child: const Text('Unlock')),
+        ],
+      ));
+      if (entered == null) return;
+      final correct = await Prefs.adminPin();
+      if (!mounted) return;
+      if (entered == correct) {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminScreen()));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Wrong PIN')));
+      }
     }
   }
   Widget _tile(IconData icon, String title, VoidCallback onTap) => ListTile(
@@ -1119,9 +1236,19 @@ class _ShareScreenState extends State<ShareScreen> {
               Text('You have $days days ad-free', style: const TextStyle(color: kGrey)),
               const SizedBox(height: 16),
               Container(
-                padding: const EdgeInsets.all(16), color: Colors.white,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
                 child: Column(children: [
-                  const Icon(Icons.qr_code_2, size: 120, color: Colors.black),
+                  // Real QR code encoding the invitation code (not a fake icon).
+                  QrImageView(
+                    data: _username.isEmpty ? 'FLIX' : _username.toUpperCase(),
+                    version: QrVersions.auto,
+                    size: 180,
+                    backgroundColor: Colors.white,
+                    eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: Colors.black),
+                    dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: Colors.black),
+                  ),
+                  const SizedBox(height: 8),
                   Text('My invitation code: ${_username.toUpperCase()}', style: const TextStyle(color: Colors.grey)),
                 ]),
               ),
@@ -1129,12 +1256,12 @@ class _ShareScreenState extends State<ShareScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: kRed, padding: const EdgeInsets.symmetric(vertical: 14)),
+                  style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: 'Join Flix with my code ${_username.toUpperCase()}'));
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invitation code copied. Share it with a friend.')));
                   },
-                  child: const Text('Share now'),
+                  child: const Text('Share now', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
                 ),
               ),
               TextButton(onPressed: () async { await Prefs.addInvite(); _load(); }, child: const Text('Demo: mark 1 friend as joined', style: TextStyle(color: kGrey))),
@@ -1164,9 +1291,9 @@ class _ShareScreenState extends State<ShareScreen> {
   }
 }
 
-// ---------------- ADMIN PANEL (hidden: tap Me avatar 5 times) ----------------
-// In production, protect this with Firebase Auth: only allow a fixed admin UID.
-// For now it is hidden, not public - there is no Admin button in the bottom bar.
+// ---------------- ADMIN PANEL (hidden + PIN: tap Me avatar 5 times, then enter PIN) ----------------
+// Default PIN is 1234. Change it inside the Admin panel. There is no Admin
+// button in the bottom bar, so normal users never see this screen.
 class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key});
   @override
@@ -1182,6 +1309,8 @@ class _AdminScreenState extends State<AdminScreen> {
   final _video = TextEditingController();
   final _q720 = TextEditingController();
   final _q1080 = TextEditingController();
+  final _episodes = TextEditingController();
+  final _pin = TextEditingController();
   String _category = 'Action';
   String _type = 'Movie';
   bool _trending = false;
@@ -1205,15 +1334,17 @@ class _AdminScreenState extends State<AdminScreen> {
     final qualities = <String, String>{};
     if (_q720.text.isNotEmpty) qualities['720p'] = _q720.text;
     if (_q1080.text.isNotEmpty) qualities['1080p'] = _q1080.text;
+    final episodeLinks = _episodes.text.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
     final m = Movie(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       title: _title.text, description: _desc.text, category: _category,
       language: _lang.text, posterUrl: _poster.text, videoUrl: _video.text,
       type: _type, year: int.tryParse(_year.text) ?? 2025,
       rating: double.tryParse(_rating.text) ?? 8.0, isTrending: _trending, qualities: qualities,
+      episodes: episodeLinks,
     );
     await MovieRepo.addMovie(m);
-    _title.clear(); _desc.clear(); _poster.clear(); _video.clear(); _q720.clear(); _q1080.clear();
+    _title.clear(); _desc.clear(); _poster.clear(); _video.clear(); _q720.clear(); _q1080.clear(); _episodes.clear();
     setState(() => _trending = false);
     _load();
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Movie added. It will now appear on Home / Categories.')));
@@ -1235,7 +1366,7 @@ class _AdminScreenState extends State<AdminScreen> {
           Row(children: [
             Expanded(child: DropdownButtonFormField<String>(value: _category, decoration: const InputDecoration(labelText: 'Category (sort by)', border: OutlineInputBorder()), items: _categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(), onChanged: (v) => setState(() => _category = v!))),
             const SizedBox(width: 10),
-            Expanded(child: DropdownButtonFormField<String>(value: _type, decoration: const InputDecoration(labelText: 'Type', border: OutlineInputBorder()), items: const [DropdownMenuItem(value: 'Movie', child: Text('Movie')), DropdownMenuItem(value: 'TV Show', child: Text('TV Show'))], onChanged: (v) => setState(() => _type = v!))),
+            Expanded(child: DropdownButtonFormField<String>(value: _type, decoration: const InputDecoration(labelText: 'Type', border: OutlineInputBorder()), items: const [DropdownMenuItem(value: 'Movie', child: Text('Movie')), DropdownMenuItem(value: 'TV Show', child: Text('TV Show')), DropdownMenuItem(value: 'Web Series', child: Text('Web Series'))], onChanged: (v) => setState(() => _type = v!))),
           ]),
           const SizedBox(height: 10),
           Row(children: [Expanded(child: _field(_year, 'Year')), const SizedBox(width: 10), Expanded(child: _field(_lang, 'Language')), const SizedBox(width: 10), Expanded(child: _field(_rating, 'Rating'))]),
@@ -1243,8 +1374,25 @@ class _AdminScreenState extends State<AdminScreen> {
           _field(_video, 'Video link (movie website / hosted video link)'),
           _field(_q720, 'Quality 720p link (optional)'),
           _field(_q1080, 'Quality 1080p link (optional)'),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: TextField(controller: _episodes, maxLines: 4, decoration: const InputDecoration(labelText: 'Episode links for TV Show / Web Series (one link per line)', border: OutlineInputBorder())),
+          ),
           SwitchListTile(title: const Text('Add to Trending (max 5)'), value: _trending, activeColor: kRed, onChanged: (v) => setState(() => _trending = v)),
-          SizedBox(width: double.infinity, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, padding: const EdgeInsets.symmetric(vertical: 14)), onPressed: _addMovie, child: const Text('Add Movie'))),
+          SizedBox(width: double.infinity, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)), onPressed: _addMovie, child: const Text('Add Movie', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)))),
+          const SizedBox(height: 16),
+          const Text('Change Admin PIN', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: TextField(controller: _pin, obscureText: true, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'New PIN (at least 4 digits)', border: OutlineInputBorder()))),
+            const SizedBox(width: 10),
+            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white), onPressed: () async {
+              if (_pin.text.length < 4) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('PIN must be at least 4 digits'))); return; }
+              await Prefs.setAdminPin(_pin.text);
+              _pin.clear();
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Admin PIN changed')));
+            }, child: const Text('Save PIN', style: TextStyle(color: Colors.white))),
+          ]),
           const SizedBox(height: 24),
           Text('Trending Movies ($trendingCount / 5) - tap star to add / remove', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
