@@ -1,0 +1,52 @@
+name: Build Flix APK
+
+# This builds a real APK in the cloud, for free, without installing
+# Flutter or Android Studio on your own computer.
+# Put these files in a GitHub repo, in this layout:
+#   lib/main.dart
+#   pubspec.yaml
+#   README.md
+#   .github/workflows/build-apk.yml   <- this file
+# PHONE-ONLY NOTE: If you upload on your phone and GitHub puts
+# main.dart in the repo root (not in lib/), this workflow still
+# works - it moves main.dart into lib/ automatically.
+# Then push to GitHub, open the Actions tab, and download the
+# "flix-apk" artifact. Unzip it to get app-release.apk.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.24.x"
+
+      - name: Create a fresh Flutter project and copy Flix code into it
+        run: |
+          if [ ! -f lib/main.dart ] && [ -f main.dart ]; then mkdir -p lib; mv main.dart lib/main.dart; fi
+          flutter create --project-name flix --org com.dino.flix --platforms android temp_flix
+          cp lib/main.dart temp_flix/lib/main.dart
+          cp pubspec.yaml temp_flix/pubspec.yaml
+
+      - name: Build APK
+        run: |
+          cd temp_flix
+          flutter pub get
+          flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: flix-apk
+          path: temp_flix/build/app/outputs/flutter-apk/app-release.apk
+          
