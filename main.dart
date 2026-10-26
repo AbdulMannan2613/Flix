@@ -16,7 +16,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
 const Color kBg = Color(0xFF0B1220);
@@ -25,6 +27,63 @@ const Color kCard2 = Color(0xFF232F45);
 const Color kRed = Color(0xFFE11D2E);
 const Color kBlue = Color(0xFF4A90E2);
 const Color kGrey = Color(0xFF8A94A6);
+
+// Build tag for in-app updates. The GitHub workflow replaces 'dev' with
+// the real build tag (for example 'build-12') before building the APK,
+// so the app knows exactly which build it is. Do not change this by hand
+// in the repo - the workflow fills it in.
+const String kBuildTag = 'dev';
+const String kRepo = 'AbdulMannan2613/Flix';
+
+/// Latest Flix release from GitHub. Returns tag + direct APK download URL.
+class UpdateChecker {
+  static Future<({String tag, String apkUrl})?> fetchLatest() async {
+    try {
+      final res = await Dio().get('https://api.github.com/repos/$kRepo/releases/latest',
+          options: Options(headers: {'Accept': 'application/vnd.github+json'}));
+      final data = res.data as Map<String, dynamic>;
+      final tag = (data['tag_name'] ?? '').toString();
+      final assets = (data['assets'] as List?) ?? [];
+      String apkUrl = '';
+      for (final a in assets) {
+        final m = Map<String, dynamic>.from(a as Map);
+        if ((m['name'] ?? '').toString() == 'app-release.apk') {
+          apkUrl = (m['browser_download_url'] ?? '').toString();
+          break;
+        }
+      }
+      if (tag.isEmpty || apkUrl.isEmpty) return null;
+      return (tag: tag, apkUrl: apkUrl);
+    } catch (_) {
+      return null; // Offline or no release yet - stay silent, do not block the app.
+    }
+  }
+
+  /// Call once on Home. If a newer release exists, show a dialog that
+  /// takes the user straight to the new APK download link.
+  static Future<void> checkAndPrompt(BuildContext context) async {
+    if (kBuildTag == 'dev') return; // Build tag was not injected - cannot tell old from new.
+    final latest = await fetchLatest();
+    if (latest == null || latest.tag == kBuildTag) return;
+    final p = await SharedPreferences.getInstance();
+    if (p.getString('dismissed_update_tag') == latest.tag) return;
+    if (!context.mounted) return;
+    final go = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: const Text('New version available'),
+      content: const Text('A new version of Flix is available with the latest changes.\n\nTap Download to get the new APK. The file will always be called app-release.apk - that is the new version, even if the name looks the same as the old file.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Later')),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white), onPressed: () => Navigator.pop(context, true), child: const Text('Download', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+      ],
+    ));
+    if (go == true) {
+      final uri = Uri.parse(latest.apkUrl);
+      if (await canLaunchUrl(uri)) await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      await p.setString('dismissed_update_tag', latest.tag);
+    }
+  }
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -62,13 +121,18 @@ class Movie {
   final Map<String, String> qualities;
   // Episode video links for TV Show / Web Series. Empty = single video (Movie).
   final List<String> episodes;
+  // All categories for this movie. A movie can be Romantic AND Thriller
+  // at the same time. 'category' is kept as the first one for old data.
+  final List<String> categories;
   Movie({
     required this.id, required this.title, required this.description,
     required this.category, required this.language, required this.posterUrl,
     required this.videoUrl, required this.type, required this.year,
     required this.rating, this.isTrending = false, this.qualities = const {},
-    this.episodes = const [],
+    this.episodes = const [], this.categories = const [],
   });
+  List<String> get allCategories => categories.isNotEmpty ? categories : [category];
+  String get categoriesText => allCategories.join(' • ');
   factory Movie.fromMap(String id, Map<String, dynamic> m) => Movie(
     id: id,
     title: m['title'] ?? 'Untitled',
@@ -83,12 +147,13 @@ class Movie {
     isTrending: m['isTrending'] ?? false,
     qualities: Map<String, String>.from(m['qualities'] ?? {}),
     episodes: List<String>.from(m['episodes'] ?? []),
+    categories: List<String>.from(m['categories'] ?? (m['category'] != null ? [m['category']] : [])),
   );
   Map<String, dynamic> toMap() => {
     'title': title, 'description': description, 'category': category,
     'language': language, 'posterUrl': posterUrl, 'videoUrl': videoUrl,
     'type': type, 'year': year, 'rating': rating, 'isTrending': isTrending,
-    'qualities': qualities, 'episodes': episodes,
+    'qualities': qualities, 'episodes': episodes, 'categories': allCategories,
   };
 }
 
@@ -172,7 +237,7 @@ class MovieRepo {
       language: m.language, posterUrl: m.posterUrl, videoUrl: m.videoUrl,
       type: m.type, year: m.year, rating: m.rating,
       isTrending: trendingIds.contains(m.id), qualities: m.qualities,
-      episodes: m.episodes,
+      episodes: m.episodes, categories: m.categories,
     )).toList();
     await saveLocal(updated);
     try {
@@ -223,6 +288,21 @@ class Prefs {
   static Future<void> setAdminPin(String pin) async {
     final p = await SharedPreferences.getInstance();
     await p.setString('admin_pin', pin);
+  }
+  // App download link shown in the share message. Flix is not on the Play
+  // Store, so the admin sets the real download page / file link here
+  // (for example a website download page). No fake link is invented.
+  static Future<String> downloadLink() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString('download_link') ?? '';
+  }
+  static Future<void> setDownloadLink(String link) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString('download_link', link);
+  }
+  static Future<String?> vipPlan() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString('vip_plan');
   }
   static Future<int> invitedCount() async {
     final p = await SharedPreferences.getInstance();
@@ -379,6 +459,12 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _future = MovieRepo.getAll();
+    // Check for a new version once, shortly after Home opens.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) UpdateChecker.checkAndPrompt(context);
+      });
+    });
     _timer = Timer.periodic(const Duration(seconds: 4), (_) {
       if (!_page.hasClients) return;
       // Auto-slide trending, loop back at the end. User can also swipe manually.
@@ -566,7 +652,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
               if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: kRed));
               final wantedType = _type == 'Movies' ? 'Movie' : _type == 'TV Shows' ? 'TV Show' : 'Web Series';
               var list = snap.data!.where((m) => m.type == wantedType).toList();
-              if (_genresSelected.isNotEmpty) list = list.where((m) => _genresSelected.contains(m.category)).toList();
+              if (_genresSelected.isNotEmpty) list = list.where((m) => m.allCategories.any((c) => _genresSelected.contains(c))).toList();
               if (_year != 'All') list = list.where((m) => m.year.toString() == _year).toList();
               if (_sort == 'Latest') list.sort((a, b) => b.year.compareTo(a.year));
               else list.sort((a, b) => b.rating.compareTo(a.rating)); // Popularity + Top today
@@ -608,7 +694,7 @@ class _SearchScreenState extends State<SearchScreen> {
   }
   List<Movie> get _results {
     if (_q.isEmpty) return [];
-    return _all.where((m) => m.title.toLowerCase().contains(_q.toLowerCase()) || m.category.toLowerCase().contains(_q.toLowerCase())).toList();
+    return _all.where((m) => m.title.toLowerCase().contains(_q.toLowerCase()) || m.categoriesText.toLowerCase().contains(_q.toLowerCase())).toList();
   }
   Future<void> _open(Movie m) async {
     await Prefs.addSearch(_q.isEmpty ? m.title : _q);
@@ -736,7 +822,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(m.title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
               const SizedBox(height: 6),
-              Row(children: [const Icon(Icons.star, color: Colors.amber, size: 18), Text(' ${m.rating}   '), Text('${m.year}  •  ${m.category}  •  ${m.language}  •  ${m.type}')]),
+              Row(children: [const Icon(Icons.star, color: Colors.amber, size: 18), Text(' ${m.rating}   '), Expanded(child: Text('${m.year}  •  ${m.categoriesText}  •  ${m.language}  •  ${m.type}'))]),
               const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,
@@ -1004,7 +1090,7 @@ class _MeScreenState extends State<MeScreen> {
           _tile(Icons.history, 'History', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()))),
           _tile(Icons.download, 'My download', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DownloadsScreen()))),
           _tile(Icons.favorite_border, 'My Favorites', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FavoritesScreen()))),
-          _tile(Icons.receipt_long, 'Order list', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VipScreen()))),
+          _tile(Icons.receipt_long, 'Order list', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrderListScreen()))),
           _tile(Icons.feedback_outlined, 'Feedback', () {
             showDialog(context: context, builder: (_) => AlertDialog(title: const Text('Feedback'), content: const TextField(decoration: InputDecoration(hintText: 'Tell us what to improve...')), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Send'))]));
           }),
@@ -1126,6 +1212,57 @@ class FavoritesScreen extends StatelessWidget {
   }
 }
 
+// ---------------- ORDER LIST: purchased plan only, no buy screen ----------------
+class OrderListScreen extends StatelessWidget {
+  const OrderListScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Order list')),
+      body: FutureBuilder<String?>(
+        future: Prefs.vipPlan(),
+        builder: (context, snap) {
+          if (!snap.hasData && snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator(color: kRed));
+          }
+          final plan = snap.data;
+          if (plan == null || plan.isEmpty) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Icon(Icons.receipt_long, size: 64, color: kGrey),
+                  SizedBox(height: 16),
+                  Text('Not purchased VIP plan yet', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                  SizedBox(height: 8),
+                  Text('You have not purchased a VIP plan yet.', style: TextStyle(color: kGrey), textAlign: TextAlign.center),
+                ]),
+              ),
+            );
+          }
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(color: kCard2, borderRadius: BorderRadius.circular(12)),
+                child: Row(children: [
+                  const Icon(Icons.workspace_premium, color: Colors.amber, size: 40),
+                  const SizedBox(width: 16),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Purchased plan: $plan', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    const Text('Status: Purchased', style: TextStyle(color: Colors.green)),
+                  ])),
+                ]),
+              ),
+            ]),
+          );
+        },
+      ),
+    );
+  }
+}
+
 // ---------------- VIP ----------------
 class VipScreen extends StatefulWidget {
   const VipScreen({super.key});
@@ -1212,12 +1349,14 @@ class ShareScreen extends StatefulWidget {
 }
 class _ShareScreenState extends State<ShareScreen> {
   String _username = '';
+  String _downloadLink = '';
   int _invited = 0;
   @override
   void initState() { super.initState(); _load(); }
   Future<void> _load() async {
     _username = await Prefs.username();
     _invited = await Prefs.invitedCount();
+    _downloadLink = await Prefs.downloadLink();
     if (mounted) setState(() {});
   }
   @override
@@ -1257,12 +1396,30 @@ class _ShareScreenState extends State<ShareScreen> {
                 width: double.infinity,
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: 'Join Flix with my code ${_username.toUpperCase()}'));
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Invitation code copied. Share it with a friend.')));
+                  onPressed: () async {
+                    // Opens the phone's system share sheet, so the user
+                    // picks the app: WhatsApp, Messenger, Telegram, etc.
+                    // The download link is the direct APK link from the
+                    // latest GitHub release, not a generic page.
+                    final code = _username.toUpperCase();
+                    final latest = await UpdateChecker.fetchLatest();
+                    final apkLink = latest?.apkUrl ?? (_downloadLink.isNotEmpty ? _downloadLink : '');
+                    final linkLine = apkLink.isNotEmpty
+                        ? 'Download Flix APK here: $apkLink'
+                        : 'Download link: no release APK yet. Download the latest flix-apk artifact from GitHub Actions, or set a link in Admin > App download link.';
+                    final message = 'Hey! Download Flix and watch movies, TV shows and web series.\n\n'
+                        'Use my invitation code: $code\n'
+                        'When you download with my code, I get ad-free days, and you get Flix too.\n\n'
+                        '$linkLine\n\n'
+                        'Join Flix now and start watching!';
+                    await Share.share(message);
                   },
                   child: const Text('Share now', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
                 ),
+              ),
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('The share message uses the direct APK download link from the latest GitHub release. If no release exists yet, set a link in Admin panel > App download link as a backup.', textAlign: TextAlign.center, style: TextStyle(color: kGrey, fontSize: 12)),
               ),
               TextButton(onPressed: () async { await Prefs.addInvite(); _load(); }, child: const Text('Demo: mark 1 friend as joined', style: TextStyle(color: kGrey))),
             ]),
@@ -1311,7 +1468,9 @@ class _AdminScreenState extends State<AdminScreen> {
   final _q1080 = TextEditingController();
   final _episodes = TextEditingController();
   final _pin = TextEditingController();
-  String _category = 'Action';
+  final _downloadLink = TextEditingController();
+  // Multi-select categories: a movie can be Romantic AND Thriller, and more.
+  final Set<String> _selectedCategories = {'Action'};
   String _type = 'Movie';
   bool _trending = false;
   List<Movie> _movies = [];
@@ -1319,7 +1478,11 @@ class _AdminScreenState extends State<AdminScreen> {
 
   @override
   void initState() { super.initState(); _load(); }
-  Future<void> _load() async { _movies = await MovieRepo.getAll(); if (mounted) setState(() {}); }
+  Future<void> _load() async {
+    _movies = await MovieRepo.getAll();
+    _downloadLink.text = await Prefs.downloadLink();
+    if (mounted) setState(() {});
+  }
 
   Widget _field(TextEditingController c, String label) => Padding(
     padding: const EdgeInsets.only(bottom: 10),
@@ -1335,13 +1498,18 @@ class _AdminScreenState extends State<AdminScreen> {
     if (_q720.text.isNotEmpty) qualities['720p'] = _q720.text;
     if (_q1080.text.isNotEmpty) qualities['1080p'] = _q1080.text;
     final episodeLinks = _episodes.text.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    if (_selectedCategories.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select at least one category')));
+      return;
+    }
+    final cats = _selectedCategories.toList();
     final m = Movie(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
-      title: _title.text, description: _desc.text, category: _category,
+      title: _title.text, description: _desc.text, category: cats.first,
       language: _lang.text, posterUrl: _poster.text, videoUrl: _video.text,
       type: _type, year: int.tryParse(_year.text) ?? 2025,
       rating: double.tryParse(_rating.text) ?? 8.0, isTrending: _trending, qualities: qualities,
-      episodes: episodeLinks,
+      episodes: episodeLinks, categories: cats,
     );
     await MovieRepo.addMovie(m);
     _title.clear(); _desc.clear(); _poster.clear(); _video.clear(); _q720.clear(); _q1080.clear(); _episodes.clear();
@@ -1363,11 +1531,18 @@ class _AdminScreenState extends State<AdminScreen> {
           const SizedBox(height: 12),
           _field(_title, 'Title'),
           _field(_desc, 'Description'),
-          Row(children: [
-            Expanded(child: DropdownButtonFormField<String>(value: _category, decoration: const InputDecoration(labelText: 'Category (sort by)', border: OutlineInputBorder()), items: _categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(), onChanged: (v) => setState(() => _category = v!))),
-            const SizedBox(width: 10),
-            Expanded(child: DropdownButtonFormField<String>(value: _type, decoration: const InputDecoration(labelText: 'Type', border: OutlineInputBorder()), items: const [DropdownMenuItem(value: 'Movie', child: Text('Movie')), DropdownMenuItem(value: 'TV Show', child: Text('TV Show')), DropdownMenuItem(value: 'Web Series', child: Text('Web Series'))], onChanged: (v) => setState(() => _type = v!))),
-          ]),
+          DropdownButtonFormField<String>(value: _type, decoration: const InputDecoration(labelText: 'Type', border: OutlineInputBorder()), items: const [DropdownMenuItem(value: 'Movie', child: Text('Movie')), DropdownMenuItem(value: 'TV Show', child: Text('TV Show')), DropdownMenuItem(value: 'Web Series', child: Text('Web Series'))], onChanged: (v) => setState(() => _type = v!)),
+          const SizedBox(height: 12),
+          const Text('Categories (tap to select more than one, e.g. Romance + Thriller)', style: TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: _categories.map((c) => FilterChip(
+            label: Text(c), selected: _selectedCategories.contains(c),
+            selectedColor: kCard2,
+            labelStyle: TextStyle(color: _selectedCategories.contains(c) ? Colors.white : kGrey, fontWeight: _selectedCategories.contains(c) ? FontWeight.bold : FontWeight.normal),
+            onSelected: (_) => setState(() {
+              if (_selectedCategories.contains(c)) { _selectedCategories.remove(c); } else { _selectedCategories.add(c); }
+            }),
+          )).toList()),
           const SizedBox(height: 10),
           Row(children: [Expanded(child: _field(_year, 'Year')), const SizedBox(width: 10), Expanded(child: _field(_lang, 'Language')), const SizedBox(width: 10), Expanded(child: _field(_rating, 'Rating'))]),
           _field(_poster, 'Poster image link'),
@@ -1380,6 +1555,17 @@ class _AdminScreenState extends State<AdminScreen> {
           ),
           SwitchListTile(title: const Text('Add to Trending (max 5)'), value: _trending, activeColor: kRed, onChanged: (v) => setState(() => _trending = v)),
           SizedBox(width: double.infinity, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)), onPressed: _addMovie, child: const Text('Add Movie', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)))),
+          const SizedBox(height: 16),
+          const Text('App download link (used in the Share message)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: TextField(controller: _downloadLink, decoration: const InputDecoration(labelText: 'Download page / file link', border: OutlineInputBorder()))),
+            const SizedBox(width: 10),
+            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white), onPressed: () async {
+              await Prefs.setDownloadLink(_downloadLink.text.trim());
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Download link saved')));
+            }, child: const Text('Save link', style: TextStyle(color: Colors.white))),
+          ]),
           const SizedBox(height: 16),
           const Text('Change Admin PIN', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
@@ -1398,7 +1584,7 @@ class _AdminScreenState extends State<AdminScreen> {
           const SizedBox(height: 8),
           ..._movies.map((m) => ListTile(
             leading: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(m.posterUrl, width: 40, height: 60, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(width: 40, height: 60, color: kCard2))),
-            title: Text(m.title), subtitle: Text('${m.category} • ${m.year}'),
+            title: Text(m.title), subtitle: Text('${m.categoriesText} • ${m.year}'),
             trailing: Row(mainAxisSize: MainAxisSize.min, children: [
               IconButton(icon: Icon(m.isTrending ? Icons.star : Icons.star_border, color: m.isTrending ? Colors.amber : kGrey), onPressed: () async {
                 var ids = _movies.where((x) => x.isTrending).map((x) => x.id).toList();
