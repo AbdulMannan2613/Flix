@@ -18,6 +18,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -46,9 +49,45 @@ jobs:
           cd temp_flix
           # Firebase needs minSdk 23; fresh Flutter projects may use 21
           sed -i 's/minSdk = 21/minSdk = 23/; s/minSdkVersion 21/minSdkVersion 23/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
+          # Inject this build's tag so the app can tell old from new.
+          # The app compares this tag with the latest GitHub release tag.
+          sed -i "s/const String kBuildTag = 'dev';/const String kBuildTag = 'build-${{ github.run_number }}';/" lib/main.dart || true
           flutter pub get
           # Generate the launcher icon from assets/icon.png (keeps building even if this fails)
           dart run flutter_launcher_icons || echo "Icon generation skipped, continuing with default icon"
+          # FIX THE ICON PROPERLY: the launcher tool shrinks the logo into
+          # the safe zone and puts it on a white tile, which is why the
+          # home screen showed a small black logo in a white square.
+          # Overwrite every launcher icon with the full cropped logo,
+          # edge to edge, so the red edge of the box is at the tile edge,
+          # and make the adaptive background black, not white.
+          pip install pillow -q || true
+          python3 - << 'PY'
+          import os, re
+          from PIL import Image
+          icon = 'assets/icon.png'
+          if os.path.exists(icon):
+              im = Image.open(icon).convert('RGBA')
+              base = 'android/app/src/main/res'
+              legacy = {'mipmap-mdpi': 48, 'mipmap-hdpi': 72, 'mipmap-xhdpi': 96, 'mipmap-xxhdpi': 144, 'mipmap-xxxhdpi': 192}
+              foreground = {'mipmap-mdpi': 108, 'mipmap-hdpi': 162, 'mipmap-xhdpi': 216, 'mipmap-xxhdpi': 324, 'mipmap-xxxhdpi': 432}
+              for folder, size in legacy.items():
+                  p = os.path.join(base, folder, 'ic_launcher.png')
+                  if os.path.isdir(os.path.join(base, folder)):
+                      im.resize((size, size), Image.LANCZOS).save(p)
+              for folder, size in foreground.items():
+                  p = os.path.join(base, folder, 'ic_launcher_foreground.png')
+                  if os.path.isdir(os.path.join(base, folder)):
+                      im.resize((size, size), Image.LANCZOS).save(p)
+              bg = os.path.join(base, 'values', 'ic_launcher_background.xml')
+              if os.path.exists(bg):
+                  t = open(bg).read()
+                  t = re.sub(r'#[0-9A-Fa-f]{6,8}', '#000000', t)
+                  open(bg, 'w').write(t)
+              print('Launcher icons overwritten edge to edge')
+          else:
+              print('No icon.png found, keeping default icon')
+          PY
           flutter build apk --release
 
       - name: Upload APK
@@ -56,4 +95,16 @@ jobs:
         with:
           name: flix-apk
           path: temp_flix/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Publish APK as a GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # This creates the direct APK download link used by the app's
+          # update check and by the Share message, for example:
+          # https://github.com/AbdulMannan2613/Flix/releases/download/build-12/app-release.apk
+          # The file name is always app-release.apk - the release tag is
+          # what tells old from new, not the file name.
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" temp_flix/build/app/outputs/flutter-apk/app-release.apk --title "Flix $TAG" --notes "Latest Flix APK. Download app-release.apk and install it." || echo "Release creation skipped"
           
