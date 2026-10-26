@@ -88,7 +88,19 @@ class UpdateChecker {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    await Firebase.initializeApp();
+    // Firebase config from Dino's google-services.json (project flix-9a157,
+    // Android package com.dino.flix). Embedded here because the GitHub
+    // workflow builds a fresh project and only copies main.dart/pubspec.yaml,
+    // so a google-services.json file alone would not connect it.
+    await Firebase.initializeApp(
+      options: const FirebaseOptions(
+        apiKey: 'AIzaSyC12Na1MoINhZrpJjDVZqfmfyYkz96y65c',
+        appId: '1:468956683510:android:501395842c28668757e0d7',
+        messagingSenderId: '468956683510',
+        projectId: 'flix-9a157',
+        storageBucket: 'flix-9a157.firebasestorage.app',
+      ),
+    );
   } catch (_) {
     // Firebase not connected yet - app runs on local sample data.
   }
