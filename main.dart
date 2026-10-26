@@ -130,8 +130,13 @@ class Tmdb {
     );
   }
 
-  /// Trending today + popular, fetched fresh on every Home load, so the
-  /// list updates daily with no manual Admin upload for these titles.
+  /// Trending today + popular + Hindi popular, fetched fresh on every
+  /// Home load, so the list updates daily with no manual Admin upload.
+  /// NOTE: the old code only asked TMDB for global popular in en-US,
+  /// so the list was mostly English / Spanish (EN / ES badges) and
+  /// almost no Hindi movies. Now Hindi popular movies are fetched
+  /// separately (original language = hi, sorted by popularity) and
+  /// merged in, so HI badges / Hindi titles appear in Popular too.
   static Future<List<Movie>> fetchTrendingAndPopular() async {
     if (!kUseTmdb) return [];
     try {
@@ -140,6 +145,8 @@ class Tmdb {
           queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US'});
       final p = await dio.get('https://api.themoviedb.org/3/movie/popular',
           queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'page': 1});
+      final h = await dio.get('https://api.themoviedb.org/3/discover/movie',
+          queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 1});
       final out = <Movie>[];
       final seen = <String>{};
       for (final raw in ((t.data['results'] as List?) ?? [])) {
@@ -147,6 +154,10 @@ class Tmdb {
         if (seen.add(m.id)) out.add(m);
       }
       for (final raw in ((p.data['results'] as List?) ?? [])) {
+        final m = _fromJson(Map<String, dynamic>.from(raw as Map), false);
+        if (seen.add(m.id)) out.add(m);
+      }
+      for (final raw in ((h.data['results'] as List?) ?? [])) {
         final m = _fromJson(Map<String, dynamic>.from(raw as Map), false);
         if (seen.add(m.id)) out.add(m);
       }
@@ -463,27 +474,35 @@ class MovieCard extends StatelessWidget {
   const MovieCard({super.key, required this.movie, this.width = 110});
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DetailsScreen(movie: movie))),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Stack(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.network(movie.posterUrl, width: width, height: width * 1.45, fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(width: width, height: width * 1.45, color: kCard2, child: const Icon(Icons.movie, color: kGrey))),
-              ),
-              Positioned(top: 0, left: 0, child: Container(color: kBlue, padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), child: Text(movie.language, style: const TextStyle(fontSize: 10, color: Colors.white)))),
-              Positioned(bottom: 4, right: 4, child: Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 13))),
-            ],
-          ),
-          const SizedBox(height: 4),
-          SizedBox(width: width, child: Text(movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))),
-        ],
-      ),
-    );
+    // FIX: Home passed width: double.infinity, so the old code did
+    // height = infinity * 1.45, which broke the Popular grid - posters
+    // and titles were pushed out / not shown, only the EN/ES badge
+    // (positioned at the top of the stack) was visible. Now the real
+    // grid cell width is used, so height is always finite.
+    return LayoutBuilder(builder: (context, constraints) {
+      final w = constraints.maxWidth.isFinite ? constraints.maxWidth : (width.isFinite ? width : 110.0);
+      return GestureDetector(
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DetailsScreen(movie: movie))),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.network(movie.posterUrl, width: w, height: w * 1.45, fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(width: w, height: w * 1.45, color: kCard2, child: const Icon(Icons.movie, color: kGrey))),
+                ),
+                Positioned(top: 0, left: 0, child: Container(color: kBlue, padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), child: Text(movie.language, style: const TextStyle(fontSize: 10, color: Colors.white)))),
+                Positioned(bottom: 4, right: 4, child: Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 13))),
+              ],
+            ),
+            const SizedBox(height: 4),
+            SizedBox(width: w, child: Text(movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))),
+          ],
+        ),
+      );
+    });
   }
 }
 
