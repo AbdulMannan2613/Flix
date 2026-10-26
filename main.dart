@@ -1412,7 +1412,7 @@ class _ShareScreenState extends State<ShareScreen> {
                         'When you download with my code, I get ad-free days, and you get Flix too.\n\n'
                         '$linkLine\n\n'
                         'Join Flix now and start watching!';
-                    await Share.share(message);
+                    await SharePlus.instance.share(ShareParams(text: message));
                   },
                   child: const Text('Share now', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
                 ),
