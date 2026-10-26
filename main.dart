@@ -85,6 +85,78 @@ class UpdateChecker {
   }
 }
 
+// ---------------- TMDB (automatic list, NO Nexstream) ----------------
+// TMDB gives movie/TV metadata only: title, poster, rating, overview,
+// trending and popular lists. It does NOT give full-movie video files,
+// and no Nexstream / third-party streaming API is used here, so TMDB
+// movies have no videoUrl. Their Watch Now button shows a clear message
+// instead of opening the player. To turn TMDB on, replace the placeholder
+// below with your free API key from themoviedb.org > Settings > API
+// (API Key v3), or send the key in chat and it will be put here for you.
+// Until a real key is put here, the app keeps working exactly as before
+// with Firestore / local / sample movies.
+const String kTmdbApiKey = '8c6fe697df81d39205f246a5b41ed3e4';
+bool get kUseTmdb => kTmdbApiKey.isNotEmpty && kTmdbApiKey != 'YOUR_TMDB_API_KEY';
+
+class Tmdb {
+  static const _genres = {
+    28: 'Action', 12: 'Adventure', 16: 'Animation', 35: 'Comedy',
+    80: 'Crime', 99: 'Documentary', 18: 'Drama', 10751: 'Family',
+    14: 'Fantasy', 36: 'History', 27: 'Horror', 10402: 'Music',
+    9648: 'Mystery', 10749: 'Romance', 878: 'Science Fiction',
+    10770: 'TV Movie', 53: 'Thriller', 10752: 'War', 37: 'Western',
+  };
+
+  static Movie _fromJson(Map<String, dynamic> j, bool trending) {
+    final poster = (j['poster_path'] ?? '').toString();
+    final ids = (j['genre_ids'] as List?) ?? [];
+    final cat = ids.isNotEmpty ? (_genres[ids.first] ?? 'Movie') : 'Movie';
+    final rel = (j['release_date'] ?? '').toString();
+    final year = int.tryParse(rel.length >= 4 ? rel.substring(0, 4) : '') ?? 2025;
+    final lang = (j['original_language'] ?? '').toString().toUpperCase();
+    return Movie(
+      id: 'tmdb_${j['id']}',
+      title: (j['title'] ?? j['name'] ?? 'Untitled').toString(),
+      description: (j['overview'] ?? '').toString(),
+      category: cat,
+      language: lang.isEmpty ? 'English' : lang,
+      posterUrl: poster.isEmpty ? '' : 'https://image.tmdb.org/t/p/w500$poster',
+      videoUrl: '', // TMDB has no full-movie file. No streaming API is used.
+      type: 'Movie',
+      year: year,
+      rating: ((j['vote_average'] ?? 7.0) as num).toDouble(),
+      isTrending: trending,
+      categories: [cat],
+    );
+  }
+
+  /// Trending today + popular, fetched fresh on every Home load, so the
+  /// list updates daily with no manual Admin upload for these titles.
+  static Future<List<Movie>> fetchTrendingAndPopular() async {
+    if (!kUseTmdb) return [];
+    try {
+      final dio = Dio();
+      final t = await dio.get('https://api.themoviedb.org/3/trending/movie/day',
+          queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US'});
+      final p = await dio.get('https://api.themoviedb.org/3/movie/popular',
+          queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'page': 1});
+      final out = <Movie>[];
+      final seen = <String>{};
+      for (final raw in ((t.data['results'] as List?) ?? [])) {
+        final m = _fromJson(Map<String, dynamic>.from(raw as Map), true);
+        if (seen.add(m.id)) out.add(m);
+      }
+      for (final raw in ((p.data['results'] as List?) ?? [])) {
+        final m = _fromJson(Map<String, dynamic>.from(raw as Map), false);
+        if (seen.add(m.id)) out.add(m);
+      }
+      return out;
+    } catch (_) {
+      return []; // Offline or bad key - caller falls back to existing movies.
+    }
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
@@ -190,6 +262,7 @@ List<Movie> sampleMovies() {
 class MovieRepo {
   static Future<List<Movie>> getAll() async {
     final local = await _localMovies();
+    List<Movie> base;
     // Try Firestore first - if it has movies, use them + local admin movies
     try {
       if (Firebase.apps.isNotEmpty) {
@@ -197,11 +270,26 @@ class MovieRepo {
         if (snap.docs.isNotEmpty) {
           final fire = snap.docs.map((d) => Movie.fromMap(d.id, d.data())).toList();
           final ids = fire.map((m) => m.id).toSet();
-          return [...fire, ...local.where((m) => !ids.contains(m.id))];
+          base = [...fire, ...local.where((m) => !ids.contains(m.id))];
+        } else {
+          base = local.isEmpty ? sampleMovies() : local;
         }
+      } else {
+        base = local.isEmpty ? sampleMovies() : local;
+      }
+    } catch (_) {
+      base = local.isEmpty ? sampleMovies() : local;
+    }
+    // TMDB automatic list on top (no Nexstream, no manual upload needed
+    // for these titles). Admin / Firestore movies are kept after them.
+    try {
+      final tmdb = await Tmdb.fetchTrendingAndPopular();
+      if (tmdb.isNotEmpty) {
+        final ids = tmdb.map((m) => m.id).toSet();
+        return [...tmdb, ...base.where((m) => !ids.contains(m.id))];
       }
     } catch (_) {}
-    return local.isEmpty ? sampleMovies() : local;
+    return base;
   }
 
   static Future<List<Movie>> _localMovies() async {
@@ -808,6 +896,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
     setState(() => _fav = !_fav);
   }
   Future<void> _download() async {
+    if (widget.movie.videoUrl.isEmpty && widget.movie.episodes.isEmpty) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No video file for this TMDB listing. TMDB gives details and posters only, not a full movie file.')));
+      return;
+    }
     try {
       final dir = await getApplicationDocumentsDirectory();
       final file = File('${dir.path}/flix_${widget.movie.id}.mp4');
@@ -841,6 +933,10 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
                   onPressed: () async {
+                    if (m.videoUrl.isEmpty && m.episodes.isEmpty) {
+                      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This is a TMDB listing: details and poster only. No full-movie video file is available for it in Flix.')));
+                      return;
+                    }
                     final hist = await getWatchHistory();
                     final entry = hist.where((e) => e.movieId == m.id).toList();
                     final start = entry.isEmpty ? 0 : entry.first.position;
