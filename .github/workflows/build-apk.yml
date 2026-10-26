@@ -79,11 +79,21 @@ jobs:
                   p = os.path.join(base, folder, 'ic_launcher_foreground.png')
                   if os.path.isdir(os.path.join(base, folder)):
                       im.resize((size, size), Image.LANCZOS).save(p)
-              bg = os.path.join(base, 'values', 'ic_launcher_background.xml')
-              if os.path.exists(bg):
-                  t = open(bg).read()
-                  t = re.sub(r'#[0-9A-Fa-f]{6,8}', '#000000', t)
-                  open(bg, 'w').write(t)
+              # Adaptive background: the launcher tool puts the background
+              # file in different places in different Flutter versions
+              # (values/ or drawable/), and it defaults to WHITE if not
+              # set. That white background is why build #20 still showed
+              # a small logo on a white tile. Force EVERY background
+              # file to black, wherever it lives.
+              for root, dirs, files in os.walk(base):
+                  for fn in files:
+                      if fn == 'ic_launcher_background.xml':
+                          p = os.path.join(root, fn)
+                          t = open(p).read()
+                          t2 = re.sub(r'#[0-9A-Fa-f]{6,8}', '#000000', t)
+                          t2 = re.sub(r'android:fillColor="[^"]+"', 'android:fillColor="#000000"', t2)
+                          open(p, 'w').write(t2)
+                          print('Background forced to black:', p)
               print('Launcher icons overwritten edge to edge')
           else:
               print('No icon.png found, keeping default icon')
