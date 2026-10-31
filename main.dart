@@ -428,12 +428,23 @@ class MovieRepo {
   static Future<List<Movie>> getAll({int hindiPages = 6}) async {
     final local = await _localMovies();
     List<Movie> base;
-    // Try Firestore first - if it has movies, use them + local admin movies
+    // Try Firestore first - if it has movies, use them + local admin movies.
+    // Firestore is the no-VPN source: the Hindi catalogue is seeded
+    // there, so Home must read it even when TMDB is unreachable.
+    // 15s server timeout (slow networks need longer than 8s), then
+    // fall back to Firestore's on-device cache, which holds the
+    // catalogue from any earlier successful read.
     try {
       if (Firebase.apps.isNotEmpty) {
-        // 8s timeout: Firestore must not hang Home on a slow/blocked network either.
-        final snap = await FirebaseFirestore.instance.collection('movies').get().timeout(const Duration(seconds: 8));
-        if (snap.docs.isNotEmpty) {
+        QuerySnapshot<Map<String, dynamic>>? snap;
+        try {
+          snap = await FirebaseFirestore.instance.collection('movies').get().timeout(const Duration(seconds: 15));
+        } catch (_) {
+          try {
+            snap = await FirebaseFirestore.instance.collection('movies').get(const GetOptions(source: Source.cache)).timeout(const Duration(seconds: 5));
+          } catch (_) {}
+        }
+        if (snap != null && snap.docs.isNotEmpty) {
           final fire = snap.docs.map((d) => Movie.fromMap(d.id, d.data())).toList();
           final ids = fire.map((m) => m.id).toSet();
           base = [...fire, ...local.where((m) => !ids.contains(m.id))];
@@ -458,18 +469,86 @@ class MovieRepo {
         .toList();
     // TMDB automatic list on top (no Nexstream, no manual upload needed
     // for these titles). Admin / Firestore movies are kept after them.
-    // 12s overall cap: if TMDB is slow/blocked without VPN, Home still
-    // opens at once with the base list instead of hanging.
+    // If Firestore already holds the seeded Hindi catalogue, only
+    // give TMDB a short 6s chance to refresh - without VPN it will
+    // fail, and Home must then show the seeded list at once instead
+    // of hanging on a spinner. If nothing is seeded yet, allow the
+    // full 15s so a slow first load can still succeed.
+    final seeded = base.any((m) => m.id.startsWith('tmdb_') && m.language.toUpperCase() == 'HI');
     try {
-      final tmdb = await Tmdb.fetchTrendingAndPopular(hindiPages: hindiPages).timeout(const Duration(seconds: 15));
+      final tmdb = await Tmdb.fetchTrendingAndPopular(hindiPages: hindiPages).timeout(Duration(seconds: seeded ? 6 : 15));
       if (tmdb.isNotEmpty) {
+        // Remember this successful list on the phone, so the next
+        // launch without VPN can show it instead of sample movies.
+        await _saveTmdbCache(tmdb);
+        // PERMANENT fix (31 Oct: Dino - "iska permanent solution
+        // karo"): also save this Hindi list into Firestore, so the
+        // app no longer depends on the phone reaching TMDB directly
+        // on every launch. Firestore (Google) opens without VPN in
+        // India, while api.themoviedb.org does not on Dino's network.
+        // Once seeded, getAll() reads the same list back from the
+        // 'movies' collection (the base list above) even with VPN
+        // off, and it survives app uninstall/reinstall, unlike the
+        // phone cache. Seeding happens automatically on any launch
+        // where TMDB loads (e.g. with VPN on); no Admin tap needed.
+        try {
+          await _syncTmdbToFirestore(tmdb)
+              .timeout(const Duration(seconds: 6));
+        } catch (_) {}
         final ids = tmdb.map((m) => m.id).toSet();
         return [...tmdb, ...base.where((m) => !ids.contains(m.id))];
       }
     } catch (_) {}
+    // No-VPN fix (31 Oct: Dino - with VPN movies come, without VPN
+    // only sample movies come back). TMDB is blocked/slow on his
+    // network without VPN, so the live fetch returns []. Instead of
+    // falling back to sample movies, show the LAST successfully
+    // loaded TMDB list saved on the phone. First-ever launch still
+    // needs VPN (or a working TMDB route) once to fill the cache;
+    // after that, cached Hindi movies show without VPN too.
+    final cached = await _loadTmdbCache();
+    if (cached.isNotEmpty) {
+      final ids = cached.map((m) => m.id).toSet();
+      return [...cached, ...base.where((m) => !ids.contains(m.id))];
+    }
     // If the stale-snapshot filter emptied the base list and TMDB
     // gave nothing, show the sample list - never an empty Home.
     return base.isEmpty ? sampleMovies() : base;
+  }
+
+  static Future<void> _saveTmdbCache(List<Movie> movies) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = movies.map((m) => {...m.toMap(), 'id': m.id}).toList();
+      await prefs.setString('tmdb_cache_v1', jsonEncode(list));
+    } catch (_) {}
+  }
+
+  // Save the Hindi TMDB list into Firestore 'movies', one document
+  // per movie, keyed by its tmdb_ id so re-seeding overwrites the
+  // same document instead of duplicating it. Admin movies added
+  // with auto-ids are untouched. Batch limit is 500; the Hindi
+  // list is ~120-200, so one batch is enough.
+  static Future<void> _syncTmdbToFirestore(List<Movie> movies) async {
+    if (Firebase.apps.isEmpty) return;
+    final db = FirebaseFirestore.instance;
+    final batch = db.batch();
+    for (final m in movies) {
+      batch.set(db.collection('movies').doc(m.id), m.toMap());
+    }
+    await batch.commit();
+  }
+
+  static Future<List<Movie>> _loadTmdbCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('tmdb_cache_v1');
+      if (raw == null) return [];
+      final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+      return list.map((m) => Movie.fromMap(m['id'] ?? '', m)).toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   static Future<List<Movie>> _localMovies() async {
@@ -844,6 +923,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
+                  // Retry: reload the list without restarting the app
+                  // (useful when the network/VPN just came back).
+                  IconButton(icon: const Icon(Icons.refresh), onPressed: () => setState(() => _future = MovieRepo.getAll(hindiPages: _hindiPages))),
                   IconButton(icon: const Icon(Icons.history), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()))),
                   IconButton(icon: const Icon(Icons.download), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DownloadsScreen()))),
                 ]),
@@ -1122,7 +1204,7 @@ class _SearchScreenState extends State<SearchScreen> {
             )),
           ] else ...[
             if (results.isEmpty) ...[
-    Text('No exact match for "$_q"', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              Text('No exact match for "$_q"', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               const SizedBox(height: 6),
               const Text('Related movies you may like:', style: TextStyle(color: kGrey)),
               const SizedBox(height: 12),
