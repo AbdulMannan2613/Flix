@@ -1122,7 +1122,7 @@ class _SearchScreenState extends State<SearchScreen> {
             )),
           ] else ...[
             if (results.isEmpty) ...[
-              Text('No exact match for "$_q"', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+    Text('No exact match for "$_q"', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               const SizedBox(height: 6),
               const Text('Related movies you may like:', style: TextStyle(color: kGrey)),
               const SizedBox(height: 12),
@@ -1460,6 +1460,7 @@ class _MeScreenState extends State<MeScreen> {
           const SizedBox(height: 8),
           Text(_username, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const Text('Movie', style: TextStyle(color: kGrey)),
+          const SizedBox(height: 16),
           // VIP banner
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1823,7 +1824,6 @@ class _ShareScreenState extends State<ShareScreen> {
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(color: kCard2, borderRadius: BorderRadius.circular(16)),
             child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Center(child: Text('Promotion Description', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
               SizedBox(height: 12),
               Text('1. For every successful promotion of 1 person, 3 days of free advertising will be given, which can be stacked infinitely~'),
@@ -1997,4 +1997,3 @@ class _AdminScreenState extends State<AdminScreen> {
     );
   }
 }
-          
