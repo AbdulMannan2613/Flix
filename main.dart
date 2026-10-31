@@ -1201,7 +1201,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
     c.addListener(() {
       if (!mounted) return;
       // When an episode ends, auto-play the next episode if there is one.
-      if (c.value.isInitializedif (index < 0 || index >= _episodeUrls.length) return;
+      if (c.value.isInitialized && c.value.duration.inSeconds > 0 &&
+          c.value.position.inSeconds >= c.value.duration.inSeconds &&
+          !c.value.isPlaying && !_advancing) {
+        _playNext(auto: true);
+      }
+      if (mounted) setState(() {});
+    });
+    setState(() => _c = c);
+  }
+  Future<void> _playEpisode(int index) async {
+    if (index < 0 || index >= _episodeUrls.length) return;
     _advancing = true;
     setState(() => _episodeIndex = index);
     await _init(_episodeUrls[index]);
@@ -1578,17 +1588,7 @@ class _VipScreenState extends State<VipScreen> {
                 child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Center(child: Text('VIP benefits', style: TextStyle(color: Colors.brown, fontSize: 20, fontWeight: FontWeight.bold))),
                   SizedBox(height: 16),
-                  Text('✓ && c.value.duration.inSeconds > 0 &&
-          c.value.position.inSeconds >= c.value.duration.inSeconds &&
-          !c.value.isPlaying && !_advancing) {
-        _playNext(auto: true);
-      }
-      if (mounted) setState(() {});
-    });
-    setState(() => _c = c);
-  }
-  Future<void> _playEpisode(int index) async {
-    Text('✓  Exempt video ads on the home page, play, download and pause.', style: TextStyle(color: Colors.brown)),
+                  Text('✓  Exempt video ads on the home page, play, download and pause.', style: TextStyle(color: Colors.brown)),
                   SizedBox(height: 8),
                   Text('✓  Unlimited download opportunities', style: TextStyle(color: Colors.brown)),
                   SizedBox(height: 8),
@@ -1899,4 +1899,3 @@ class _AdminScreenState extends State<AdminScreen> {
     );
   }
 }
-        
