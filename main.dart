@@ -578,6 +578,31 @@ String fmtTime(int seconds) {
 }
 
 // ---------------- SHARED WIDGETS ----------------
+// ONE rectangle fit image, used in BOTH the Home slider and the
+// Details page, so tapping a movie shows the SAME image in Details
+// as in the slider. It always fills the rectangle: the same image
+// is drawn behind with BoxFit.cover (fills every corner, no black
+// bars), and on top of it the WHOLE image is drawn with
+// BoxFit.contain (nothing cut off). For a wide backdrop the two
+// layers match exactly; for a tall poster with no backdrop, the
+// whole poster shows in the middle and the cover layer fills the
+// sides, instead of black side bars (Avengers: Doomsday, 31 Oct).
+class FitRectangleImage extends StatelessWidget {
+  final String url;
+  const FitRectangleImage({super.key, required this.url});
+  @override
+  Widget build(BuildContext context) {
+    if (url.isEmpty) return Container(color: kCard2);
+    return Container(
+      color: Colors.black,
+      child: Stack(children: [
+        Positioned.fill(child: Image.network(url, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: Colors.black))),
+        Positioned.fill(child: Image.network(url, fit: BoxFit.contain, errorBuilder: (_, __, ___) => Container(color: Colors.black))),
+      ]),
+    );
+  }
+}
+
 class MovieCard extends StatelessWidget {
   final Movie movie; final double width;
   const MovieCard({super.key, required this.movie, this.width = 110});
@@ -752,10 +777,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
                         child: Stack(children: [
-                          // Home slider kept exactly as it was (poster image).
-                          // Only the Details page below was changed to a
-                          // fit rectangle image, per Dino's 31 Oct note.
-                          ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(m.posterUrl, width: double.infinity, height: 220, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: kCard2))),
+                          // Slider: SAME rectangle fit image as Details
+                          // (FitRectangleImage, backdrop if any, else
+                          // poster) - whole image, no cutting.
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: SizedBox(width: double.infinity, height: 220, child: FitRectangleImage(url: m.rectangleImageUrl)),
+                          ),
                           Positioned(left: 12, bottom: 12, child: Text(m.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 8, color: Colors.black)]))),
                         ]),
                       ),
@@ -1075,12 +1103,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
           // top, as in the 31 Oct screenshot) - black bars fill any
           // leftover space in the 16:9 rectangle. Backdrop is used
           // when available, otherwise the poster, both fitted whole.
-          Container(
-            color: Colors.black,
-            child: AspectRatio(
-              aspectRatio: 16 / 9,
-              child: Image.network(m.rectangleImageUrl, width: double.infinity, fit: BoxFit.contain, errorBuilder: (_, __, ___) => Container(color: kCard2)),
-            ),
+          // Details: SAME rectangle fit image as the slider
+          // (FitRectangleImage) - whether the tap came from the
+          // slider or from the Popular grid, the same image shows.
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: FitRectangleImage(url: m.rectangleImageUrl),
           ),
           Padding(
             padding: const EdgeInsets.all(16),
@@ -1173,17 +1201,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     c.addListener(() {
       if (!mounted) return;
       // When an episode ends, auto-play the next episode if there is one.
-      if (c.value.isInitialized && c.value.duration.inSeconds > 0 &&
-          c.value.position.inSeconds >= c.value.duration.inSeconds &&
-          !c.value.isPlaying && !_advancing) {
-        _playNext(auto: true);
-      }
-      if (mounted) setState(() {});
-    });
-    setState(() => _c = c);
-  }
-  Future<void> _playEpisode(int index) async {
-    if (index < 0 || index >= _episodeUrls.length) return;
+      if (c.value.isInitializedif (index < 0 || index >= _episodeUrls.length) return;
     _advancing = true;
     setState(() => _episodeIndex = index);
     await _init(_episodeUrls[index]);
@@ -1560,7 +1578,17 @@ class _VipScreenState extends State<VipScreen> {
                 child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Center(child: Text('VIP benefits', style: TextStyle(color: Colors.brown, fontSize: 20, fontWeight: FontWeight.bold))),
                   SizedBox(height: 16),
-                  Text('✓  Exempt video ads on the home page, play, download and pause.', style: TextStyle(color: Colors.brown)),
+                  Text('✓ && c.value.duration.inSeconds > 0 &&
+          c.value.position.inSeconds >= c.value.duration.inSeconds &&
+          !c.value.isPlaying && !_advancing) {
+        _playNext(auto: true);
+      }
+      if (mounted) setState(() {});
+    });
+    setState(() => _c = c);
+  }
+  Future<void> _playEpisode(int index) async {
+    Text('✓  Exempt video ads on the home page, play, download and pause.', style: TextStyle(color: Colors.brown)),
                   SizedBox(height: 8),
                   Text('✓  Unlimited download opportunities', style: TextStyle(color: Colors.brown)),
                   SizedBox(height: 8),
@@ -1871,3 +1899,4 @@ class _AdminScreenState extends State<AdminScreen> {
     );
   }
 }
+        
