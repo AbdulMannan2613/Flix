@@ -214,16 +214,23 @@ class Tmdb {
       // only loses its own page, never the whole Hindi list.
       final lists = await Future.wait([
         for (var p = 1; p <= hindiPages; p++)
+          // DISPLAY language is en-US (31 Oct: Dino - titles must stay
+          // in English, not Hindi script). The Hindi filter is
+          // with_original_language=hi, so these are still Hindi
+          // movies, badged HI - only their titles/descriptions stay
+          // in English. hi-IN is fetched only for the popular list
+          // below, to detect a Hindi version for the HI badge.
           _list(dio, 'https://api.themoviedb.org/3/discover/movie',
-              {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': p}),
+              {'api_key': kTmdbApiKey, 'language': 'en-US', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': p}),
         _list(dio, 'https://api.themoviedb.org/3/movie/popular',
             {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'page': 1}),
         _list(dio, 'https://api.themoviedb.org/3/movie/popular',
             {'api_key': kTmdbApiKey, 'language': 'en-US', 'page': 1}),
       ]).timeout(const Duration(seconds: 15));
       final popularHi = lists[hindiPages];
-      final enById = <String, Map<String, dynamic>>{
-        for (final m in lists[hindiPages + 1]) '${m['id']}': m,
+      final popularEn = lists[hindiPages + 1];
+      final hiById = <String, Map<String, dynamic>>{
+        for (final m in popularHi) '${m['id']}': m,
       };
       final out = <Movie>[];
       final seen = <String>{};
@@ -237,21 +244,22 @@ class Tmdb {
           addRaw(j, false);
         }
       }
-      // Fallback: if every hi-IN Hindi-discover page came back empty
-      // (hi-IN translation layer slow/blocked), retry page 1 in en-US -
-      // Hindi originals are still Hindi originals, badge HI.
+      // Fallback: if every en-US Hindi-discover page came back empty,
+      // retry page 1 in hi-IN - Hindi titles are better than no list.
       if (out.isEmpty) {
         final retry = await _list(dio, 'https://api.themoviedb.org/3/discover/movie',
-            {'api_key': kTmdbApiKey, 'language': 'en-US', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 1});
+            {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 1});
         for (final j in retry) {
           addRaw(j, false);
         }
       }
       // (2) Global popular, only if a Hindi version exists - badge HI.
-      for (final j in popularHi) {
+      // Display uses the en-US record (English title), the hi-IN
+      // record is only the Hindi-version signal for the badge.
+      for (final j in popularEn) {
         if ((j['original_language'] ?? '').toString() == 'hi') {
           addRaw(j, false);
-        } else if (_hasHindiVersion(j, enById['${j['id']}'])) {
+        } else if (_hasHindiVersion(hiById['${j['id']}'] ?? {}, j)) {
           addRaw(j, true);
         }
         // No Hindi version -> skipped entirely (no EN/KO in grid).
@@ -278,21 +286,24 @@ class Tmdb {
       ]).timeout(const Duration(seconds: 10));
       // Badge rule in Search too: Hindi version exists -> HI,
       // otherwise the movie's original language (EN/KO/...).
-      final enById = <String, Map<String, dynamic>>{};
-      for (final raw in ((results[1].data?['results'] as List?) ?? [])) {
+      // Display is English (en-US first, 31 Oct: Dino - keep the
+      // language English); the hi-IN results are only the signal
+      // for the HI badge, and fill in titles found only in hi-IN.
+      final hiById = <String, Map<String, dynamic>>{};
+      for (final raw in ((results[0].data?['results'] as List?) ?? [])) {
         final m = Map<String, dynamic>.from(raw as Map);
-        enById['${m['id']}'] = m;
+        hiById['${m['id']}'] = m;
       }
       final out = <Movie>[];
       final seen = <String>{};
-      for (final raw in ((results[0].data?['results'] as List?) ?? [])) {
+      for (final raw in ((results[1].data?['results'] as List?) ?? [])) {
         final j = Map<String, dynamic>.from(raw as Map);
         final dubbed = (j['original_language'] ?? '').toString() != 'hi' &&
-            _hasHindiVersion(j, enById['${j['id']}']);
+            _hasHindiVersion(hiById['${j['id']}'] ?? {}, j);
         final m = _fromJson(j, false, hindiDubbed: dubbed);
         if (seen.add(m.id)) out.add(m);
       }
-      for (final raw in ((results[1].data?['results'] as List?) ?? [])) {
+      for (final raw in ((results[0].data?['results'] as List?) ?? [])) {
         final j = Map<String, dynamic>.from(raw as Map);
         final m = _fromJson(j, false);
         if (seen.add(m.id)) out.add(m);
@@ -788,8 +799,11 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!_page.hasClients) return;
       // Auto-slide trending, loop back at the end. User can also swipe manually.
       _future.then((movies) {
+        // Same slider list as build(): TMDB Hindi movies first, so
+        // the slider does not stay stuck on the sample trending list.
+        final tmdb = movies.where((m) => m.id.startsWith('tmdb_')).toList();
         final t = movies.where((m) => m.isTrending).toList();
-        final list = t.isEmpty ? movies : t;
+        final list = tmdb.isNotEmpty ? tmdb.take(5).toList() : (t.isEmpty ? movies : t);
         if (list.isEmpty) return;
         final next = (_pageIndex + 1) % list.length;
         _page.animateToPage(next, duration: const Duration(milliseconds: 500), curve: Curves.easeInOut);
@@ -808,7 +822,13 @@ class _HomeScreenState extends State<HomeScreen> {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: kRed));
           final movies = snap.data!;
           final trending = movies.where((m) => m.isTrending).toList();
-          final slider = trending.isEmpty ? movies.take(5).toList() : trending.take(5).toList();
+          // Slider: TMDB Hindi movies first (English titles, HI badge).
+          // Without this, the sample movies' isTrending flags hijacked
+          // the slider even when the Hindi TMDB list had loaded.
+          final tmdbMovies = movies.where((m) => m.id.startsWith('tmdb_')).toList();
+          final slider = tmdbMovies.isNotEmpty
+              ? tmdbMovies.take(5).toList()
+              : (trending.isEmpty ? movies.take(5).toList() : trending.take(5).toList());
           return SingleChildScrollView(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Padding(
@@ -833,7 +853,7 @@ class _HomeScreenState extends State<HomeScreen> {
               SizedBox(
                 height: 220,
                 child: PageView.builder(
-               controller: _page,
+                  controller: _page,
                   onPageChanged: (i) => setState(() => _pageIndex = i),
                   itemCount: slider.length,
                   itemBuilder: (context, i) {
@@ -1216,7 +1236,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
               const SizedBox(height: 10),
               Row(children: [
                 Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? 'Saved' : 'Favorite'))),
-        const SizedBox(width: 10),
+                const SizedBox(width: 10),
                 Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: const Text('Download'))),
               ]),
               const SizedBox(height: 20),
@@ -1440,7 +1460,6 @@ class _MeScreenState extends State<MeScreen> {
           const SizedBox(height: 8),
           Text(_username, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const Text('Movie', style: TextStyle(color: kGrey)),
-          const SizedBox(height: 16),
           // VIP banner
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1581,7 +1600,7 @@ class FavoritesScreen extends StatelessWidget {
               return GridView.builder(padding: const EdgeInsets.all(12), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.62, crossAxisSpacing: 8, mainAxisSpacing: 12), itemCount: favs.length, itemBuilder: (context, i) => MovieCard(movie: favs[i], width: double.infinity));
             },
           );
-  },
+        },
       ),
     );
   }
@@ -1804,6 +1823,7 @@ class _ShareScreenState extends State<ShareScreen> {
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(color: kCard2, borderRadius: BorderRadius.circular(16)),
             child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Center(child: Text('Promotion Description', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
               SizedBox(height: 12),
               Text('1. For every successful promotion of 1 person, 3 days of free advertising will be given, which can be stacked infinitely~'),
@@ -1977,3 +1997,4 @@ class _AdminScreenState extends State<AdminScreen> {
     );
   }
 }
+          
