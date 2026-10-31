@@ -107,7 +107,13 @@ class Tmdb {
     10770: 'TV Movie', 53: 'Thriller', 10752: 'War', 37: 'Western',
   };
 
-  static Movie _fromJson(Map<String, dynamic> j, bool trending) {
+  // hindiDubbed=true forces the badge to HI. TMDB's list endpoints
+  // do not say whether a movie has Hindi DUB AUDIO, only whether a
+  // Hindi translation (title/overview) exists - that is the only
+  // signal available here, so a movie with a Hindi translation in
+  // TMDB is treated as Hindi-dubbed for the badge. If there is no
+  // Hindi translation, the original language is kept.
+  static Movie _fromJson(Map<String, dynamic> j, bool trending, {bool hindiDubbed = false}) {
     final poster = (j['poster_path'] ?? '').toString();
     final backdrop = (j['backdrop_path'] ?? '').toString();
     final ids = (j['genre_ids'] as List?) ?? [];
@@ -120,7 +126,7 @@ class Tmdb {
       title: (j['title'] ?? j['name'] ?? 'Untitled').toString(),
       description: (j['overview'] ?? '').toString(),
       category: cat,
-      language: lang.isEmpty ? 'English' : lang,
+      language: hindiDubbed ? 'HI' : (lang.isEmpty ? 'EN' : lang),
       posterUrl: poster.isEmpty ? '' : 'https://image.tmdb.org/t/p/w500$poster',
       // Wide rectangle backdrop (w1280) for the Home slider and Details page.
       backdropUrl: backdrop.isEmpty ? '' : 'https://image.tmdb.org/t/p/w1280$backdrop',
@@ -148,42 +154,70 @@ class Tmdb {
         receiveTimeout: const Duration(seconds: 8),
       ));
 
-  static List<Movie> _list(dynamic data, bool trending) {
-    final out = <Movie>[];
-    for (final raw in ((data?['results'] as List?) ?? [])) {
-      out.add(_fromJson(Map<String, dynamic>.from(raw as Map), trending));
-    }
-    return out;
+  // A movie counts as Hindi-dubbed for the badge/grid when its
+  // hi-IN version in TMDB has a DIFFERENT overview from the en-US
+  // version (i.e. a Hindi translation actually exists in TMDB).
+  // Without a Hindi translation TMDB falls back to the English
+  // overview, so identical overviews mean no Hindi version is
+  // known - the movie is then left out of the Hindi-only grid.
+  static bool _hasHindiVersion(Map<String, dynamic> hi, Map<String, dynamic>? en) {
+    final hiOv = (hi['overview'] ?? '').toString().trim();
+    if (hiOv.isEmpty || en == null) return false;
+    return hiOv != (en['overview'] ?? '').toString().trim();
   }
 
-  /// India-first: Hindi originals first, then global popular with
-  /// Hindi (hi-IN) titles/descriptions where TMDB has them (Hindi-
-  /// dubbed / Hindi-version metadata), then Trending, then global
-  /// popular in English. Home's Popular grid shows this list in
-  /// order, so its top rows are Hindi / Hindi-dubbed. The Trending
-  /// slider is unaffected - it filters by isTrending.
+  /// Hindi-only Home grid (31 Oct: Dino - EN/KO movies must stop
+  /// appearing, grid must be Hindi movies). Home shows this list in
+  /// order, so the grid is: (1) Hindi originals, pages 1-3 of
+  /// discover/movie with_original_language=hi, badge HI; (2) global
+  /// popular movies that have a Hindi version in TMDB, badge HI.
+  /// Global EN/KO originals with NO Hindi version are NOT added at
+  /// all, so no EN/KO badge appears in the grid. The slider uses the
+  /// first 5 of this same Hindi list (Home falls back to take(5)
+  /// when nothing is marked trending). Search is separate - it
+  /// still finds non-Hindi movies, with their original badge.
   static Future<List<Movie>> fetchTrendingAndPopular() async {
     if (!kUseTmdb) return [];
     try {
       final dio = _dio();
       final results = await Future.wait([
         dio.get('https://api.themoviedb.org/3/discover/movie',
-            queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 1}),
+            queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 1}),
+        dio.get('https://api.themoviedb.org/3/discover/movie',
+            queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 2}),
+        dio.get('https://api.themoviedb.org/3/discover/movie',
+            queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 3}),
         dio.get('https://api.themoviedb.org/3/movie/popular',
             queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'page': 1}),
-        dio.get('https://api.themoviedb.org/3/trending/movie/day',
-            queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US'}),
         dio.get('https://api.themoviedb.org/3/movie/popular',
             queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'page': 1}),
       ]).timeout(const Duration(seconds: 10));
-      final hindi = _list(results[0].data, false);
-      final dubbed = _list(results[1].data, false);
-      final trending = _list(results[2].data, true);
-      final popular = _list(results[3].data, false);
+      final enById = <String, Map<String, dynamic>>{};
+      for (final raw in ((results[4].data?['results'] as List?) ?? [])) {
+        final m = Map<String, dynamic>.from(raw as Map);
+        enById['${m['id']}'] = m;
+      }
       final out = <Movie>[];
       final seen = <String>{};
-      for (final m in [...hindi, ...dubbed, ...trending, ...popular]) {
+      void addRaw(Map<String, dynamic> j, bool hindiDubbed) {
+        final m = _fromJson(j, false, hindiDubbed: hindiDubbed);
         if (seen.add(m.id)) out.add(m);
+      }
+      // (1) Hindi originals - always HI.
+      for (var i = 0; i < 3; i++) {
+        for (final raw in ((results[i].data?['results'] as List?) ?? [])) {
+          addRaw(Map<String, dynamic>.from(raw as Map), false);
+        }
+      }
+      // (2) Global popular, only if a Hindi version exists - badge HI.
+      for (final raw in ((results[3].data?['results'] as List?) ?? [])) {
+        final j = Map<String, dynamic>.from(raw as Map);
+        if ((j['original_language'] ?? '').toString() == 'hi') {
+          addRaw(j, false);
+        } else if (_hasHindiVersion(j, enById['${j['id']}'])) {
+          addRaw(j, true);
+        }
+        // No Hindi version -> skipped entirely (no EN/KO in grid).
       }
       return out;
     } catch (_) {
@@ -205,12 +239,26 @@ class Tmdb {
         dio.get('https://api.themoviedb.org/3/search/movie',
             queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'query': query, 'page': 1, 'include_adult': false}),
       ]).timeout(const Duration(seconds: 10));
+      // Badge rule in Search too: Hindi version exists -> HI,
+      // otherwise the movie's original language (EN/KO/...).
+      final enById = <String, Map<String, dynamic>>{};
+      for (final raw in ((results[1].data?['results'] as List?) ?? [])) {
+        final m = Map<String, dynamic>.from(raw as Map);
+        enById['${m['id']}'] = m;
+      }
       final out = <Movie>[];
       final seen = <String>{};
-      for (final r in results) {
-        for (final m in _list(r.data, false)) {
-          if (seen.add(m.id)) out.add(m);
-        }
+      for (final raw in ((results[0].data?['results'] as List?) ?? [])) {
+        final j = Map<String, dynamic>.from(raw as Map);
+        final dubbed = (j['original_language'] ?? '').toString() != 'hi' &&
+            _hasHindiVersion(j, enById['${j['id']}']);
+        final m = _fromJson(j, false, hindiDubbed: dubbed);
+        if (seen.add(m.id)) out.add(m);
+      }
+      for (final raw in ((results[1].data?['results'] as List?) ?? [])) {
+        final j = Map<String, dynamic>.from(raw as Map);
+        final m = _fromJson(j, false);
+        if (seen.add(m.id)) out.add(m);
       }
       return out;
     } catch (_) {
@@ -704,9 +752,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
                         child: Stack(children: [
-                          // Rectangle slider: wide backdrop image fits the
-                          // 16:9 rectangle without cropping a tall poster.
-                          ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(m.rectangleImageUrl, width: double.infinity, height: 220, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: kCard2))),
+                          // Home slider kept exactly as it was (poster image).
+                          // Only the Details page below was changed to a
+                          // fit rectangle image, per Dino's 31 Oct note.
+                          ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(m.posterUrl, width: double.infinity, height: 220, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: kCard2))),
                           Positioned(left: 12, bottom: 12, child: Text(m.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 8, color: Colors.black)]))),
                         ]),
                       ),
@@ -1021,12 +1070,17 @@ class _DetailsScreenState extends State<DetailsScreen> {
       appBar: AppBar(title: Text(m.title)),
       body: SingleChildScrollView(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Details page: rectangle (16:9) image, same for Trending
-          // slider taps and Popular grid taps - wide backdrop fits
-          // the rectangle, instead of a tall cropped poster.
-          AspectRatio(
-            aspectRatio: 16 / 9,
-            child: Image.network(m.rectangleImageUrl, width: double.infinity, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: kCard2)),
+          // Details page ONLY: new rectangle FIT image. BoxFit.contain
+          // shows the WHOLE image with no cutting (no cropped head /
+          // top, as in the 31 Oct screenshot) - black bars fill any
+          // leftover space in the 16:9 rectangle. Backdrop is used
+          // when available, otherwise the poster, both fitted whole.
+          Container(
+            color: Colors.black,
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: Image.network(m.rectangleImageUrl, width: double.infinity, fit: BoxFit.contain, errorBuilder: (_, __, ___) => Container(color: kCard2)),
+            ),
           ),
           Padding(
             padding: const EdgeInsets.all(16),
