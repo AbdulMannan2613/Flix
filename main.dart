@@ -162,41 +162,69 @@ class Tmdb {
   // known - the movie is then left out of the Hindi-only grid.
   static bool _hasHindiVersion(Map<String, dynamic> hi, Map<String, dynamic>? en) {
     final hiOv = (hi['overview'] ?? '').toString().trim();
-    if (hiOv.isEmpty || en == null) return false;
+    final hiTitle = (hi['title'] ?? '').toString().trim();
+    final enTitle = (en?['title'] ?? '').toString().trim();
+    // A Hindi title in TMDB (e.g. Devanagari transliteration) is itself
+    // a Hindi translation, even when the hi-IN overview is empty -
+    // many popular titles have an empty hi-IN overview but a Hindi title.
+    if (en == null) return hiOv.isNotEmpty;
+    if (hiTitle.isNotEmpty && enTitle.isNotEmpty && hiTitle != enTitle) return true;
+    if (hiOv.isEmpty) return false;
     return hiOv != (en['overview'] ?? '').toString().trim();
+  }
+
+  // One TMDB list request, isolated: a single slow/failed request
+  // returns [] instead of killing the whole Home fetch. (31 Oct fix:
+  // the old Future.wait threw if ANY of the 5 requests failed, so
+  // one slow Hindi-discover request wiped out the entire Hindi list
+  // and Home fell back to the old saved global list.)
+  static Future<List<Map<String, dynamic>>> _list(
+      Dio dio, String path, Map<String, dynamic> qp) async {
+    try {
+      final r = await dio.get(path, queryParameters: qp)
+          .timeout(const Duration(seconds: 8));
+      return ((r.data?['results'] as List?) ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   /// Hindi-only Home grid (31 Oct: Dino - EN/KO movies must stop
   /// appearing, grid must be Hindi movies). Home shows this list in
-  /// order, so the grid is: (1) Hindi originals, pages 1-3 of
-  /// discover/movie with_original_language=hi, badge HI; (2) global
+  /// order, so the grid is: (1) Hindi originals, pages 1-6 (default)
+  /// of discover/movie with_original_language=hi, badge HI; (2) global
   /// popular movies that have a Hindi version in TMDB, badge HI.
   /// Global EN/KO originals with NO Hindi version are NOT added at
   /// all, so no EN/KO badge appears in the grid. The slider uses the
   /// first 5 of this same Hindi list (Home falls back to take(5)
   /// when nothing is marked trending). Search is separate - it
   /// still finds non-Hindi movies, with their original badge.
-  static Future<List<Movie>> fetchTrendingAndPopular() async {
+  /// NOTE: TMDB has lakhs of titles, so ALL of them can never be
+  /// loaded at once - the app loads page by page (20 per page).
+  /// "Aur Movies Dikhao" on Home loads more Hindi pages (up to 10
+  /// pages = ~200 Hindi titles + dubbed popular), and Search finds
+  /// any TMDB title in the world, not only the grid titles.
+  static Future<List<Movie>> fetchTrendingAndPopular({int hindiPages = 6}) async {
     if (!kUseTmdb) return [];
     try {
       final dio = _dio();
-      final results = await Future.wait([
-        dio.get('https://api.themoviedb.org/3/discover/movie',
-            queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 1}),
-        dio.get('https://api.themoviedb.org/3/discover/movie',
-            queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 2}),
-        dio.get('https://api.themoviedb.org/3/discover/movie',
-            queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 3}),
-        dio.get('https://api.themoviedb.org/3/movie/popular',
-            queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'page': 1}),
-        dio.get('https://api.themoviedb.org/3/movie/popular',
-            queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'page': 1}),
-      ]).timeout(const Duration(seconds: 10));
-      final enById = <String, Map<String, dynamic>>{};
-      for (final raw in ((results[4].data?['results'] as List?) ?? [])) {
-        final m = Map<String, dynamic>.from(raw as Map);
-        enById['${m['id']}'] = m;
-      }
+      // Each list is fetched separately, so one slow/failed request
+      // only loses its own page, never the whole Hindi list.
+      final lists = await Future.wait([
+        for (var p = 1; p <= hindiPages; p++)
+          _list(dio, 'https://api.themoviedb.org/3/discover/movie',
+              {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': p}),
+        _list(dio, 'https://api.themoviedb.org/3/movie/popular',
+            {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'page': 1}),
+        _list(dio, 'https://api.themoviedb.org/3/movie/popular',
+            {'api_key': kTmdbApiKey, 'language': 'en-US', 'page': 1}),
+      ]).timeout(const Duration(seconds: 15));
+      final popularHi = lists[hindiPages];
+      final enById = <String, Map<String, dynamic>>{
+        for (final m in lists[hindiPages + 1]) '${m['id']}': m,
+      };
       final out = <Movie>[];
       final seen = <String>{};
       void addRaw(Map<String, dynamic> j, bool hindiDubbed) {
@@ -204,14 +232,23 @@ class Tmdb {
         if (seen.add(m.id)) out.add(m);
       }
       // (1) Hindi originals - always HI.
-      for (var i = 0; i < 3; i++) {
-        for (final raw in ((results[i].data?['results'] as List?) ?? [])) {
-          addRaw(Map<String, dynamic>.from(raw as Map), false);
+      for (var i = 0; i < hindiPages; i++) {
+        for (final j in lists[i]) {
+          addRaw(j, false);
+        }
+      }
+      // Fallback: if every hi-IN Hindi-discover page came back empty
+      // (hi-IN translation layer slow/blocked), retry page 1 in en-US -
+      // Hindi originals are still Hindi originals, badge HI.
+      if (out.isEmpty) {
+        final retry = await _list(dio, 'https://api.themoviedb.org/3/discover/movie',
+            {'api_key': kTmdbApiKey, 'language': 'en-US', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 1});
+        for (final j in retry) {
+          addRaw(j, false);
         }
       }
       // (2) Global popular, only if a Hindi version exists - badge HI.
-      for (final raw in ((results[3].data?['results'] as List?) ?? [])) {
-        final j = Map<String, dynamic>.from(raw as Map);
+      for (final j in popularHi) {
         if ((j['original_language'] ?? '').toString() == 'hi') {
           addRaw(j, false);
         } else if (_hasHindiVersion(j, enById['${j['id']}'])) {
@@ -226,7 +263,7 @@ class Tmdb {
   }
 
   /// Live TMDB search: any movie in TMDB can be found, not only the
-  /// 60-80 titles pre-loaded on Home. Searched in Hindi and in
+  /// titles pre-loaded on Home. Searched in Hindi and in
   /// English and merged, so a non-Hindi / English title the user
   /// types also appears in Search results.
   static Future<List<Movie>> searchMovies(String query) async {
@@ -377,7 +414,7 @@ List<Movie> sampleMovies() {
 
 // ---------------- REPOSITORY + LOCAL STORAGE ----------------
 class MovieRepo {
-  static Future<List<Movie>> getAll() async {
+  static Future<List<Movie>> getAll({int hindiPages = 6}) async {
     final local = await _localMovies();
     List<Movie> base;
     // Try Firestore first - if it has movies, use them + local admin movies
@@ -398,18 +435,30 @@ class MovieRepo {
     } catch (_) {
       base = local.isEmpty ? sampleMovies() : local;
     }
+    // Drop the STALE saved TMDB snapshot: Admin's Trending manager
+    // saves the whole getAll() list into local storage, so the old
+    // global EN/KO TMDB list (Street Fighter, Avengers, Hope...) was
+    // saved on the phone and kept coming back in the grid/silder
+    // even after the Hindi-only fetch, whenever TMDB was slow.
+    // Only saved TMDB movies already badged HI are kept; Admin /
+    // Firestore movies (non-tmdb ids) are always kept.
+    base = base
+        .where((m) => !(m.id.startsWith('tmdb_') && m.language.toUpperCase() != 'HI'))
+        .toList();
     // TMDB automatic list on top (no Nexstream, no manual upload needed
     // for these titles). Admin / Firestore movies are kept after them.
     // 12s overall cap: if TMDB is slow/blocked without VPN, Home still
     // opens at once with the base list instead of hanging.
     try {
-      final tmdb = await Tmdb.fetchTrendingAndPopular().timeout(const Duration(seconds: 12));
+      final tmdb = await Tmdb.fetchTrendingAndPopular(hindiPages: hindiPages).timeout(const Duration(seconds: 15));
       if (tmdb.isNotEmpty) {
         final ids = tmdb.map((m) => m.id).toSet();
         return [...tmdb, ...base.where((m) => !ids.contains(m.id))];
       }
     } catch (_) {}
-    return base;
+    // If the stale-snapshot filter emptied the base list and TMDB
+    // gave nothing, show the sample list - never an empty Home.
+    return base.isEmpty ? sampleMovies() : base;
   }
 
   static Future<List<Movie>> _localMovies() async {
@@ -707,11 +756,28 @@ class _HomeScreenState extends State<HomeScreen> {
   late Future<List<Movie>> _future;
   final _page = PageController();
   int _pageIndex = 0;
+  int _hindiPages = 6;
+  bool _loadingMore = false;
   Timer? _timer;
+
+  // "Aur Movies Dikhao": load 4 more Hindi pages (up to 10 pages).
+  Future<void> _loadMore() async {
+    if (_loadingMore || _hindiPages >= 10) return;
+    setState(() {
+      _loadingMore = true;
+      _hindiPages += 4;
+      _future = MovieRepo.getAll(hindiPages: _hindiPages);
+    });
+    try {
+      await _future;
+    } catch (_) {}
+    if (mounted) setState(() => _loadingMore = false);
+  }
+
   @override
   void initState() {
     super.initState();
-    _future = MovieRepo.getAll();
+    _future = MovieRepo.getAll(hindiPages: _hindiPages);
     // Check for a new version once, shortly after Home opens.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.delayed(const Duration(seconds: 2), () {
@@ -767,7 +833,7 @@ class _HomeScreenState extends State<HomeScreen> {
               SizedBox(
                 height: 220,
                 child: PageView.builder(
-                  controller: _page,
+               controller: _page,
                   onPageChanged: (i) => setState(() => _pageIndex = i),
                   itemCount: slider.length,
                   itemBuilder: (context, i) {
@@ -805,6 +871,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   itemBuilder: (context, i) => MovieCard(movie: movies[i], width: double.infinity),
                 ),
               ),
+              if (_hindiPages < 10)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 16, 12, 0),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white),
+                      onPressed: _loadingMore ? null : _loadMore,
+                      child: Text(_loadingMore ? 'Loading...' : 'Aur Movies Dikhao', style: const TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ),
               const SizedBox(height: 16),
             ]),
           );
@@ -1138,7 +1216,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
               const SizedBox(height: 10),
               Row(children: [
                 Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? 'Saved' : 'Favorite'))),
-                const SizedBox(width: 10),
+        const SizedBox(width: 10),
                 Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: const Text('Download'))),
               ]),
               const SizedBox(height: 20),
@@ -1503,7 +1581,7 @@ class FavoritesScreen extends StatelessWidget {
               return GridView.builder(padding: const EdgeInsets.all(12), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.62, crossAxisSpacing: 8, mainAxisSpacing: 12), itemCount: favs.length, itemBuilder: (context, i) => MovieCard(movie: favs[i], width: double.infinity));
             },
           );
-        },
+  },
       ),
     );
   }
