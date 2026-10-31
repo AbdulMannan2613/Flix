@@ -109,6 +109,7 @@ class Tmdb {
 
   static Movie _fromJson(Map<String, dynamic> j, bool trending) {
     final poster = (j['poster_path'] ?? '').toString();
+    final backdrop = (j['backdrop_path'] ?? '').toString();
     final ids = (j['genre_ids'] as List?) ?? [];
     final cat = ids.isNotEmpty ? (_genres[ids.first] ?? 'Movie') : 'Movie';
     final rel = (j['release_date'] ?? '').toString();
@@ -121,6 +122,8 @@ class Tmdb {
       category: cat,
       language: lang.isEmpty ? 'English' : lang,
       posterUrl: poster.isEmpty ? '' : 'https://image.tmdb.org/t/p/w500$poster',
+      // Wide rectangle backdrop (w1280) for the Home slider and Details page.
+      backdropUrl: backdrop.isEmpty ? '' : 'https://image.tmdb.org/t/p/w1280$backdrop',
       videoUrl: '', // TMDB has no full-movie file. No streaming API is used.
       type: 'Movie',
       year: year,
@@ -130,40 +133,88 @@ class Tmdb {
     );
   }
 
-  /// Trending today + popular + Hindi popular, fetched fresh on every
-  /// Home load, so the list updates daily with no manual Admin upload.
-  /// NOTE: the old code only asked TMDB for global popular in en-US,
-  /// so the list was mostly English / Spanish (EN / ES badges) and
-  /// almost no Hindi movies. Now Hindi popular movies are fetched
-  /// separately (original language = hi, sorted by popularity) and
-  /// merged in, so HI badges / Hindi titles appear in Popular too.
+  // FIX for "app does not run without VPN": the old code awaited
+  // TMDB one request after another with NO timeout. If TMDB / the
+  // network is slow or blocked on a connection, Home stayed on the
+  // loading spinner and the app looked dead until a VPN changed the
+  // route. Now every request has an 8s timeout, all lists are fetched
+  // in parallel, and the whole fetch gives up after 10s - then the
+  // caller falls back at once to Firestore / local / sample movies,
+  // so the app always OPENS, with or without VPN. If TMDB itself is
+  // blocked on that network, its list will simply be empty until the
+  // network allows it - the app will not hang.
+  static Dio _dio() => Dio(BaseOptions(
+        connectTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 8),
+      ));
+
+  static List<Movie> _list(dynamic data, bool trending) {
+    final out = <Movie>[];
+    for (final raw in ((data?['results'] as List?) ?? [])) {
+      out.add(_fromJson(Map<String, dynamic>.from(raw as Map), trending));
+    }
+    return out;
+  }
+
+  /// India-first: Hindi originals first, then global popular with
+  /// Hindi (hi-IN) titles/descriptions where TMDB has them (Hindi-
+  /// dubbed / Hindi-version metadata), then Trending, then global
+  /// popular in English. Home's Popular grid shows this list in
+  /// order, so its top rows are Hindi / Hindi-dubbed. The Trending
+  /// slider is unaffected - it filters by isTrending.
   static Future<List<Movie>> fetchTrendingAndPopular() async {
     if (!kUseTmdb) return [];
     try {
-      final dio = Dio();
-      final t = await dio.get('https://api.themoviedb.org/3/trending/movie/day',
-          queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US'});
-      final p = await dio.get('https://api.themoviedb.org/3/movie/popular',
-          queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'page': 1});
-      final h = await dio.get('https://api.themoviedb.org/3/discover/movie',
-          queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 1});
+      final dio = _dio();
+      final results = await Future.wait([
+        dio.get('https://api.themoviedb.org/3/discover/movie',
+            queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': 1}),
+        dio.get('https://api.themoviedb.org/3/movie/popular',
+            queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'page': 1}),
+        dio.get('https://api.themoviedb.org/3/trending/movie/day',
+            queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US'}),
+        dio.get('https://api.themoviedb.org/3/movie/popular',
+            queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'page': 1}),
+      ]).timeout(const Duration(seconds: 10));
+      final hindi = _list(results[0].data, false);
+      final dubbed = _list(results[1].data, false);
+      final trending = _list(results[2].data, true);
+      final popular = _list(results[3].data, false);
       final out = <Movie>[];
       final seen = <String>{};
-      for (final raw in ((t.data['results'] as List?) ?? [])) {
-        final m = _fromJson(Map<String, dynamic>.from(raw as Map), true);
-        if (seen.add(m.id)) out.add(m);
-      }
-      for (final raw in ((p.data['results'] as List?) ?? [])) {
-        final m = _fromJson(Map<String, dynamic>.from(raw as Map), false);
-        if (seen.add(m.id)) out.add(m);
-      }
-      for (final raw in ((h.data['results'] as List?) ?? [])) {
-        final m = _fromJson(Map<String, dynamic>.from(raw as Map), false);
+      for (final m in [...hindi, ...dubbed, ...trending, ...popular]) {
         if (seen.add(m.id)) out.add(m);
       }
       return out;
     } catch (_) {
-      return []; // Offline or bad key - caller falls back to existing movies.
+      return []; // Offline / blocked / bad key - caller falls back.
+    }
+  }
+
+  /// Live TMDB search: any movie in TMDB can be found, not only the
+  /// 60-80 titles pre-loaded on Home. Searched in Hindi and in
+  /// English and merged, so a non-Hindi / English title the user
+  /// types also appears in Search results.
+  static Future<List<Movie>> searchMovies(String query) async {
+    if (!kUseTmdb || query.trim().isEmpty) return [];
+    try {
+      final dio = _dio();
+      final results = await Future.wait([
+        dio.get('https://api.themoviedb.org/3/search/movie',
+            queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'query': query, 'page': 1, 'include_adult': false}),
+        dio.get('https://api.themoviedb.org/3/search/movie',
+            queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'query': query, 'page': 1, 'include_adult': false}),
+      ]).timeout(const Duration(seconds: 10));
+      final out = <Movie>[];
+      final seen = <String>{};
+      for (final r in results) {
+        for (final m in _list(r.data, false)) {
+          if (seen.add(m.id)) out.add(m);
+        }
+      }
+      return out;
+    } catch (_) {
+      return [];
     }
   }
 }
@@ -210,6 +261,9 @@ class FlixApp extends StatelessWidget {
 // ---------------- MODEL ----------------
 class Movie {
   final String id, title, description, category, language, posterUrl, videoUrl, type;
+  // Wide rectangle (16:9) backdrop image, from TMDB backdrop_path.
+  // Empty for local/sample movies - UI then falls back to posterUrl.
+  final String backdropUrl;
   final int year;
   final double rating;
   final bool isTrending;
@@ -224,8 +278,10 @@ class Movie {
     required this.category, required this.language, required this.posterUrl,
     required this.videoUrl, required this.type, required this.year,
     required this.rating, this.isTrending = false, this.qualities = const {},
-    this.episodes = const [], this.categories = const [],
+    this.episodes = const [], this.categories = const [], this.backdropUrl = '',
   });
+  // Rectangle image for slider / details: backdrop if there is one, else poster.
+  String get rectangleImageUrl => backdropUrl.isNotEmpty ? backdropUrl : posterUrl;
   List<String> get allCategories => categories.isNotEmpty ? categories : [category];
   String get categoriesText => allCategories.join(' • ');
   factory Movie.fromMap(String id, Map<String, dynamic> m) => Movie(
@@ -243,12 +299,14 @@ class Movie {
     qualities: Map<String, String>.from(m['qualities'] ?? {}),
     episodes: List<String>.from(m['episodes'] ?? []),
     categories: List<String>.from(m['categories'] ?? (m['category'] != null ? [m['category']] : [])),
+    backdropUrl: m['backdropUrl'] ?? '',
   );
   Map<String, dynamic> toMap() => {
     'title': title, 'description': description, 'category': category,
     'language': language, 'posterUrl': posterUrl, 'videoUrl': videoUrl,
     'type': type, 'year': year, 'rating': rating, 'isTrending': isTrending,
     'qualities': qualities, 'episodes': episodes, 'categories': allCategories,
+    'backdropUrl': backdropUrl,
   };
 }
 
@@ -277,7 +335,8 @@ class MovieRepo {
     // Try Firestore first - if it has movies, use them + local admin movies
     try {
       if (Firebase.apps.isNotEmpty) {
-        final snap = await FirebaseFirestore.instance.collection('movies').get();
+        // 8s timeout: Firestore must not hang Home on a slow/blocked network either.
+        final snap = await FirebaseFirestore.instance.collection('movies').get().timeout(const Duration(seconds: 8));
         if (snap.docs.isNotEmpty) {
           final fire = snap.docs.map((d) => Movie.fromMap(d.id, d.data())).toList();
           final ids = fire.map((m) => m.id).toSet();
@@ -293,8 +352,10 @@ class MovieRepo {
     }
     // TMDB automatic list on top (no Nexstream, no manual upload needed
     // for these titles). Admin / Firestore movies are kept after them.
+    // 12s overall cap: if TMDB is slow/blocked without VPN, Home still
+    // opens at once with the base list instead of hanging.
     try {
-      final tmdb = await Tmdb.fetchTrendingAndPopular();
+      final tmdb = await Tmdb.fetchTrendingAndPopular().timeout(const Duration(seconds: 12));
       if (tmdb.isNotEmpty) {
         final ids = tmdb.map((m) => m.id).toSet();
         return [...tmdb, ...base.where((m) => !ids.contains(m.id))];
@@ -643,7 +704,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
                         child: Stack(children: [
-                          ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(m.posterUrl, width: double.infinity, height: 220, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: kCard2))),
+                          // Rectangle slider: wide backdrop image fits the
+                          // 16:9 rectangle without cropping a tall poster.
+                          ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(m.rectangleImageUrl, width: double.infinity, height: 220, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: kCard2))),
                           Positioned(left: 12, bottom: 12, child: Text(m.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 8, color: Colors.black)]))),
                         ]),
                       ),
@@ -801,6 +864,8 @@ class _SearchScreenState extends State<SearchScreen> {
   final _ctrl = TextEditingController();
   List<String> _history = [];
   List<Movie> _all = [];
+  List<Movie> _tmdbResults = [];
+  int _searchSeq = 0;
   @override
   void initState() {
     super.initState();
@@ -811,9 +876,26 @@ class _SearchScreenState extends State<SearchScreen> {
     _all = await MovieRepo.getAll();
     if (mounted) setState(() {});
   }
+  // Live TMDB search on every query change (debounced by sequence:
+  // only the latest query's results are kept). Local results are
+  // shown at once; TMDB results are merged in when they arrive, so
+  // a movie that is not in Hindi / not pre-loaded on Home still
+  // appears in Search.
+  Future<void> _searchTmdb(String q) async {
+    final seq = ++_searchSeq;
+    if (q.trim().isEmpty) {
+      if (mounted) setState(() => _tmdbResults = []);
+      return;
+    }
+    final found = await Tmdb.searchMovies(q);
+    if (!mounted || seq != _searchSeq) return;
+    setState(() => _tmdbResults = found);
+  }
   List<Movie> get _results {
     if (_q.isEmpty) return [];
-    return _all.where((m) => m.title.toLowerCase().contains(_q.toLowerCase()) || m.categoriesText.toLowerCase().contains(_q.toLowerCase())).toList();
+    final local = _all.where((m) => m.title.toLowerCase().contains(_q.toLowerCase()) || m.categoriesText.toLowerCase().contains(_q.toLowerCase())).toList();
+    final ids = local.map((m) => m.id).toSet();
+    return [...local, ..._tmdbResults.where((m) => !ids.contains(m.id))];
   }
   Future<void> _open(Movie m) async {
     await Prefs.addSearch(_q.isEmpty ? m.title : _q);
@@ -830,7 +912,7 @@ class _SearchScreenState extends State<SearchScreen> {
           controller: _ctrl,
           autofocus: true,
           decoration: const InputDecoration(hintText: 'Title / Actor / Director', border: InputBorder.none, hintStyle: TextStyle(color: kGrey)),
-          onChanged: (v) => setState(() => _q = v),
+          onChanged: (v) { setState(() => _q = v); _searchTmdb(v); },
         ),
         actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: Colors.white)))],
       ),
@@ -850,7 +932,7 @@ class _SearchScreenState extends State<SearchScreen> {
                 label: Text(h), backgroundColor: kCard2,
                 deleteIcon: const Icon(Icons.close, size: 16),
                 onDeleted: () async { await Prefs.removeSearch(h); _load(); },
-                onPressed: () { _ctrl.text = h; setState(() => _q = h); },
+                onPressed: () { _ctrl.text = h; setState(() => _q = h); _searchTmdb(h); },
               )).toList()),
             const SizedBox(height: 24),
             const Text('Popular Searches', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
@@ -939,7 +1021,13 @@ class _DetailsScreenState extends State<DetailsScreen> {
       appBar: AppBar(title: Text(m.title)),
       body: SingleChildScrollView(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Image.network(m.posterUrl, width: double.infinity, height: 380, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(height: 380, color: kCard2)),
+          // Details page: rectangle (16:9) image, same for Trending
+          // slider taps and Popular grid taps - wide backdrop fits
+          // the rectangle, instead of a tall cropped poster.
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: Image.network(m.rectangleImageUrl, width: double.infinity, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(color: kCard2)),
+          ),
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
