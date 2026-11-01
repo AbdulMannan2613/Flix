@@ -109,7 +109,60 @@ class UpdateChecker {
 // Until a real key is put here, the app keeps working exactly as before
 // with Firestore / local / sample movies.
 const String kTmdbApiKey = '8c6fe697df81d39205f246a5b41ed3e4';
-bool get kUseTmdb => kTmdbApiKey.isNotEmpty && kTmdbApiKey != 'YOUR_TMDB_API_KEY';
+bool get kUseTmdb => kTmdbApiKey.isNotEmpty && kTmdbApiKey != '8c6fe697df81d39205f246a5b41ed3e4';
+
+// ---------------- STREAMING API (placeholder - not connected yet) ----------------
+// This is the single spot where a video-source / streaming API key
+// goes IF you later connect a legal video-source provider (for
+// example your own video backend, or a licensed catalogue API).
+//
+// Flix does NOT call any third-party streaming API today:
+//   - TMDB entries have videoUrl = '' (metadata + poster only).
+//   - Admin-added movies carry YOUR OWN hosted link in videoUrl.
+// That behaviour is unchanged until you fill the key below AND
+// implement StreamingApi.fetchVideoUrl().
+//
+// HOW TO USE:
+//   1. Replace 'YOUR_STREAMING_API_KEY' below with the real key.
+//   2. Implement StreamingApi.fetchVideoUrl() (example shape in
+//      the doc comment). Return the direct .mp4/.m3u8 URL string,
+//      or null if there is no match.
+//   3. In DetailsScreen's "Watch Now" button and in
+//      PlayerScreen.initState, call:
+//          final url = await StreamingApi.fetchVideoUrl(m.id);
+//      and use `url` when it is not null (fall back to the current
+//      m.videoUrl / m.episodes logic otherwise).
+//
+// LEGAL: only use providers / URLs you are licensed to stream.
+// Do NOT paste links copied from another streaming site.
+const String kStreamingApiKey = 'nx_0a870df2c80f0d4e0d59a723987e0be7';
+bool get kUseStreamingApi =>
+    kStreamingApiKey.isNotEmpty && kStreamingApiKey != 'nx_0a870df2c80f0d4e0d59a723987e0be7';
+
+class StreamingApi {
+  /// Returns a direct video URL for [movieId], or null when the
+  /// streaming provider is not connected / has no match / errors.
+  ///
+  /// STUB - replace the body when you have a real provider. Example
+  /// shape (Dio is already imported):
+  ///
+  ///   final res = await Dio().get(
+  ///     'https://api.your-provider.com/v1/movie/$movieId',
+  ///     queryParameters: {'api_key': kStreamingApiKey},
+  ///     options: Options(headers: {'Accept': 'application/json'}),
+  ///   ).timeout(const Duration(seconds: 8));
+  ///   final url = (res.data?['video_url'] ?? '').toString();
+  ///   return url.isEmpty ? null : url;
+  ///
+  /// Keep the 8s timeout so a slow provider never blocks the
+  /// player - the caller can fall back to the existing
+  /// "no video file" message (see Lang.t('noVideo')).
+  static Future<String?> fetchVideoUrl(String movieId) async {
+    if (!kUseStreamingApi) return null; // Key not filled -> app runs as before.
+    // TODO: implement the provider request here and return the URL.
+    return null;
+  }
+}
 
 class Tmdb {
   static const _genres = {
