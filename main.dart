@@ -1723,6 +1723,7 @@ class _SearchScreenState extends State<SearchScreen> {
               Text(Lang.t('nothingSearched'), style: const TextStyle(color: kGrey))
             else
               Wrap(spacing: 8, runSpacing: 8, children: _history.map((h) => InputChip(
+                label: Text(h), backgroundColor: kCard2,
                 deleteIcon: const Icon(Icons.close, size: 16),
                 onDeleted: () async { await Prefs.removeSearch(h); _load(); },
                 onPressed: () { _ctrl.text = h; setState(() => _q = h); _searchTmdb(h); },
@@ -2097,7 +2098,7 @@ class _MeScreenState extends State<MeScreen> {
                 ])),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.white),
-         onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => _vipActive ? const OrderListScreen() : const VipScreen())),
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => _vipActive ? const OrderListScreen() : const VipScreen())),
                   child: Text(_vipActive ? Lang.t('orderList') : Lang.t('subscribe'), style: const TextStyle(color: Colors.black)),
                 ),
               ]),
