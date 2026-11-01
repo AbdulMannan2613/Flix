@@ -118,6 +118,9 @@ class Tmdb {
     14: 'Fantasy', 36: 'History', 27: 'Horror', 10402: 'Music',
     9648: 'Mystery', 10749: 'Romance', 878: 'Science Fiction',
     10770: 'TV Movie', 53: 'Thriller', 10752: 'War', 37: 'Western',
+    10759: 'Action & Adventure', 10762: 'Kids', 10763: 'News',
+    10764: 'Reality', 10765: 'Sci-Fi & Fantasy', 10766: 'Soap',
+    10767: 'Talk', 10768: 'War & Politics',
   };
 
   // hindiDubbed=true forces the badge to HI. TMDB's list endpoints
@@ -126,16 +129,16 @@ class Tmdb {
   // signal available here, so a movie with a Hindi translation in
   // TMDB is treated as Hindi-dubbed for the badge. If there is no
   // Hindi translation, the original language is kept.
-  static Movie _fromJson(Map<String, dynamic> j, bool trending, {bool hindiDubbed = false}) {
+  static Movie _fromJson(Map<String, dynamic> j, bool trending, {bool hindiDubbed = false, bool isTv = false}) {
     final poster = (j['poster_path'] ?? '').toString();
     final backdrop = (j['backdrop_path'] ?? '').toString();
     final ids = (j['genre_ids'] as List?) ?? [];
     final cat = ids.isNotEmpty ? (_genres[ids.first] ?? 'Movie') : 'Movie';
-    final rel = (j['release_date'] ?? '').toString();
+    final rel = (j['release_date'] ?? j['first_air_date'] ?? '').toString();
     final year = int.tryParse(rel.length >= 4 ? rel.substring(0, 4) : '') ?? 2025;
     final lang = (j['original_language'] ?? '').toString().toUpperCase();
     return Movie(
-      id: 'tmdb_${j['id']}',
+      id: isTv ? 'tmdb_tv_${j['id']}' : 'tmdb_${j['id']}',
       title: (j['title'] ?? j['name'] ?? 'Untitled').toString(),
       description: (j['overview'] ?? '').toString(),
       category: cat,
@@ -144,7 +147,7 @@ class Tmdb {
       // Wide rectangle backdrop (w1280) for the Home slider and Details page.
       backdropUrl: backdrop.isEmpty ? '' : 'https://image.tmdb.org/t/p/w1280$backdrop',
       videoUrl: '', // TMDB has no full-movie file. No streaming API is used.
-      type: 'Movie',
+      type: isTv ? 'TV Show' : 'Movie',
       year: year,
       rating: ((j['vote_average'] ?? 7.0) as num).toDouble(),
       isTrending: trending,
@@ -175,8 +178,8 @@ class Tmdb {
   // known - the movie is then left out of the Hindi-only grid.
   static bool _hasHindiVersion(Map<String, dynamic> hi, Map<String, dynamic>? en) {
     final hiOv = (hi['overview'] ?? '').toString().trim();
-    final hiTitle = (hi['title'] ?? '').toString().trim();
-    final enTitle = (en?['title'] ?? '').toString().trim();
+    final hiTitle = ((hi['title'] ?? hi['name']) ?? '').toString().trim();
+    final enTitle = ((en?['title'] ?? en?['name']) ?? '').toString().trim();
     // A Hindi title in TMDB (e.g. Devanagari transliteration) is itself
     // a Hindi translation, even when the hi-IN overview is empty -
     // many popular titles have an empty hi-IN overview but a Hindi title.
@@ -204,16 +207,23 @@ class Tmdb {
     }
   }
 
-  /// Hindi-only Home grid (31 Oct: Dino - EN/KO movies must stop
-  /// appearing, grid must be Hindi movies). Home shows this list in
-  /// order, so the grid is: (1) Hindi originals, pages 1-6 (default)
-  /// of discover/movie with_original_language=hi, badge HI; (2) global
-  /// popular movies that have a Hindi version in TMDB, badge HI.
-  /// Global EN/KO originals with NO Hindi version are NOT added at
-  /// all, so no EN/KO badge appears in the grid. The slider uses the
-  /// first 5 of this same Hindi list (Home falls back to take(5)
-  /// when nothing is marked trending). Search is separate - it
-  /// still finds non-Hindi movies, with their original badge.
+  /// Hindi-version Home grid (31 Oct + 1 Nov clarification: Dino) -
+  /// grid and slider show ONLY titles that are in Hindi, from ANY
+  /// country - a Korean / foreign title is fine in the grid when it
+  /// has a Hindi version in TMDB, badge HI. Mainly Indian movies,
+  /// plus very popular foreign movies / web series with a Hindi
+  /// version. Home shows this list in order: (1) Hindi original
+  /// movies, pages 1-6 (default) of discover/movie
+  /// with_original_language=hi, badge HI; (2) Hindi original web
+  /// series / TV shows; (3) global popular movies with a Hindi
+  /// version; (4) popular web series with a Hindi version;
+  /// (5) Korean movies with a Hindi version; (6) Korean web series
+  /// with a Hindi version. Titles with NO Hindi version are NOT
+  /// added at all, so no EN/KO badge appears in the grid. The
+  /// slider uses the first 5 of this same Hindi list (Home falls
+  /// back to take(5) when nothing is marked trending). Search is
+  /// separate - it still finds original-language titles, with
+  /// their original badge.
   /// NOTE: TMDB has lakhs of titles, so ALL of them can never be
   /// loaded at once - the app loads page by page (20 per page).
   /// "Aur Movies Dikhao" on Home loads more Hindi pages (up to 10
@@ -239,16 +249,56 @@ class Tmdb {
             {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'page': 1}),
         _list(dio, 'https://api.themoviedb.org/3/movie/popular',
             {'api_key': kTmdbApiKey, 'language': 'en-US', 'page': 1}),
+        // Korean movies, hi-IN + en-US (pages 1-2): kept only with
+        // a Hindi version, badge HI (1 Nov: Dino - Korean titles
+        // are fine in the grid when they are in Hindi).
+        for (var p = 1; p <= 2; p++)
+          _list(dio, 'https://api.themoviedb.org/3/discover/movie',
+              {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'with_original_language': 'ko', 'sort_by': 'popularity.desc', 'page': p}),
+        for (var p = 1; p <= 2; p++)
+          _list(dio, 'https://api.themoviedb.org/3/discover/movie',
+              {'api_key': kTmdbApiKey, 'language': 'en-US', 'with_original_language': 'ko', 'sort_by': 'popularity.desc', 'page': p}),
+        // Hindi web series / TV shows, originals pages 1-2, badge HI.
+        for (var p = 1; p <= 2; p++)
+          _list(dio, 'https://api.themoviedb.org/3/discover/tv',
+              {'api_key': kTmdbApiKey, 'language': 'en-US', 'with_original_language': 'hi', 'sort_by': 'popularity.desc', 'page': p}),
+        // Popular web series, hi-IN + en-US: kept only with a Hindi
+        // version, badge HI (1 Nov: Dino - popular Hindi web series
+        // in the grid too).
+        _list(dio, 'https://api.themoviedb.org/3/tv/popular',
+            {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'page': 1}),
+        _list(dio, 'https://api.themoviedb.org/3/tv/popular',
+            {'api_key': kTmdbApiKey, 'language': 'en-US', 'page': 1}),
+        // Korean web series, hi-IN + en-US (pages 1-2): kept only
+        // with a Hindi version, badge HI.
+        for (var p = 1; p <= 2; p++)
+          _list(dio, 'https://api.themoviedb.org/3/discover/tv',
+              {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'with_original_language': 'ko', 'sort_by': 'popularity.desc', 'page': p}),
+        for (var p = 1; p <= 2; p++)
+          _list(dio, 'https://api.themoviedb.org/3/discover/tv',
+              {'api_key': kTmdbApiKey, 'language': 'en-US', 'with_original_language': 'ko', 'sort_by': 'popularity.desc', 'page': p}),
       ]).timeout(const Duration(seconds: 15));
       final popularHi = lists[hindiPages];
       final popularEn = lists[hindiPages + 1];
       final hiById = <String, Map<String, dynamic>>{
         for (final m in popularHi) '${m['id']}': m,
       };
+      // Extra lists, in the order appended to Future.wait above:
+      // +2,+3 Korean movies hi-IN; +4,+5 Korean movies en-US;
+      // +6,+7 Hindi TV originals en-US; +8 TV popular hi-IN,
+      // +9 TV popular en-US; +10,+11 Korean TV hi-IN;
+      // +12,+13 Korean TV en-US.
+      final koMovieHi = lists.sublist(hindiPages + 2, hindiPages + 4).expand((e) => e).toList();
+      final koMovieEn = lists.sublist(hindiPages + 4, hindiPages + 6).expand((e) => e).toList();
+      final tvHi = lists.sublist(hindiPages + 6, hindiPages + 8).expand((e) => e).toList();
+      final tvPopHi = lists[hindiPages + 8];
+      final tvPopEn = lists[hindiPages + 9];
+      final koTvHi = lists.sublist(hindiPages + 10, hindiPages + 12).expand((e) => e).toList();
+      final koTvEn = lists.sublist(hindiPages + 12, hindiPages + 14).expand((e) => e).toList();
       final out = <Movie>[];
       final seen = <String>{};
-      void addRaw(Map<String, dynamic> j, bool hindiDubbed) {
-        final m = _fromJson(j, false, hindiDubbed: hindiDubbed);
+      void addRaw(Map<String, dynamic> j, bool hindiDubbed, {bool isTv = false}) {
+        final m = _fromJson(j, false, hindiDubbed: hindiDubbed, isTv: isTv);
         if (seen.add(m.id)) out.add(m);
       }
       // (1) Hindi originals - always HI.
@@ -277,16 +327,53 @@ class Tmdb {
         }
         // No Hindi version -> skipped entirely (no EN/KO in grid).
       }
+      // (3) Hindi original web series / TV shows - always HI.
+      for (final j in tvHi) {
+        addRaw(j, false, isTv: true);
+      }
+      // (4) Popular web series, only if a Hindi version exists.
+      // Display uses the en-US record (English title), the hi-IN
+      // record is only the Hindi-version signal for the badge.
+      final tvHiById = <String, Map<String, dynamic>>{
+        for (final m in tvPopHi) '${m['id']}': m,
+      };
+      for (final j in tvPopEn) {
+        if ((j['original_language'] ?? '').toString() == 'hi') {
+          addRaw(j, false, isTv: true);
+        } else if (_hasHindiVersion(tvHiById['${j['id']}'] ?? {}, j)) {
+          addRaw(j, true, isTv: true);
+        }
+      }
+      // (5) Korean movies, only if a Hindi version exists - badge HI.
+      final koMovieHiById = <String, Map<String, dynamic>>{
+        for (final m in koMovieHi) '${m['id']}': m,
+      };
+      for (final j in koMovieEn) {
+        if (_hasHindiVersion(koMovieHiById['${j['id']}'] ?? {}, j)) {
+          addRaw(j, true);
+        }
+      }
+      // (6) Korean web series, only if a Hindi version exists - badge HI.
+      final koTvHiById = <String, Map<String, dynamic>>{
+        for (final m in koTvHi) '${m['id']}': m,
+      };
+      for (final j in koTvEn) {
+        if (_hasHindiVersion(koTvHiById['${j['id']}'] ?? {}, j)) {
+          addRaw(j, true, isTv: true);
+        }
+      }
       return out;
     } catch (_) {
       return []; // Offline / blocked / bad key - caller falls back.
     }
   }
 
-  /// Live TMDB search: any movie in TMDB can be found, not only the
-  /// titles pre-loaded on Home. Searched in Hindi and in
-  /// English and merged, so a non-Hindi / English title the user
-  /// types also appears in Search results.
+  /// Live TMDB search: any movie or web series in TMDB can be
+  /// found, not only the titles pre-loaded on Home. Searched in
+  /// Hindi and in English and merged, so a non-Hindi / English
+  /// title the user types also appears in Search results.
+  /// Original-language titles appear ONLY here, never in the
+  /// Home grid (1 Nov: Dino).
   static Future<List<Movie>> searchMovies(String query) async {
     if (!kUseTmdb || query.trim().isEmpty) return [];
     try {
@@ -295,6 +382,10 @@ class Tmdb {
         dio.get('https://api.themoviedb.org/3/search/movie',
             queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'query': query, 'page': 1, 'include_adult': false}),
         dio.get('https://api.themoviedb.org/3/search/movie',
+            queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'query': query, 'page': 1, 'include_adult': false}),
+        dio.get('https://api.themoviedb.org/3/search/tv',
+            queryParameters: {'api_key': kTmdbApiKey, 'language': 'hi-IN', 'query': query, 'page': 1, 'include_adult': false}),
+        dio.get('https://api.themoviedb.org/3/search/tv',
             queryParameters: {'api_key': kTmdbApiKey, 'language': 'en-US', 'query': query, 'page': 1, 'include_adult': false}),
       ]).timeout(const Duration(seconds: 10));
       // Badge rule in Search too: Hindi version exists -> HI,
@@ -307,6 +398,11 @@ class Tmdb {
         final m = Map<String, dynamic>.from(raw as Map);
         hiById['${m['id']}'] = m;
       }
+      final tvHiById = <String, Map<String, dynamic>>{};
+      for (final raw in ((results[2].data?['results'] as List?) ?? [])) {
+        final m = Map<String, dynamic>.from(raw as Map);
+        tvHiById['${m['id']}'] = m;
+      }
       final out = <Movie>[];
       final seen = <String>{};
       for (final raw in ((results[1].data?['results'] as List?) ?? [])) {
@@ -316,9 +412,21 @@ class Tmdb {
         final m = _fromJson(j, false, hindiDubbed: dubbed);
         if (seen.add(m.id)) out.add(m);
       }
+      for (final raw in ((results[3].data?['results'] as List?) ?? [])) {
+        final j = Map<String, dynamic>.from(raw as Map);
+        final dubbed = (j['original_language'] ?? '').toString() != 'hi' &&
+            _hasHindiVersion(tvHiById['${j['id']}'] ?? {}, j);
+        final m = _fromJson(j, false, hindiDubbed: dubbed, isTv: true);
+        if (seen.add(m.id)) out.add(m);
+      }
       for (final raw in ((results[0].data?['results'] as List?) ?? [])) {
         final j = Map<String, dynamic>.from(raw as Map);
         final m = _fromJson(j, false);
+        if (seen.add(m.id)) out.add(m);
+      }
+      for (final raw in ((results[2].data?['results'] as List?) ?? [])) {
+        final j = Map<String, dynamic>.from(raw as Map);
+        final m = _fromJson(j, false, isTv: true);
         if (seen.add(m.id)) out.add(m);
       }
       return out;
@@ -866,7 +974,7 @@ class MovieRepo {
   // per movie, keyed by its tmdb_ id so re-seeding overwrites the
   // same document instead of duplicating it. Admin movies added
   // with auto-ids are untouched. Batch limit is 500; the Hindi
-  // list is ~120-200, so one batch is enough.
+  // list is ~120-300, so one batch is enough.
   static Future<void> _syncTmdbToFirestore(List<Movie> movies) async {
     if (Firebase.apps.isEmpty) return;
     final db = FirebaseFirestore.instance;
@@ -1615,7 +1723,6 @@ class _SearchScreenState extends State<SearchScreen> {
               Text(Lang.t('nothingSearched'), style: const TextStyle(color: kGrey))
             else
               Wrap(spacing: 8, runSpacing: 8, children: _history.map((h) => InputChip(
-                label: Text(h), backgroundColor: kCard2,
                 deleteIcon: const Icon(Icons.close, size: 16),
                 onDeleted: () async { await Prefs.removeSearch(h); _load(); },
                 onPressed: () { _ctrl.text = h; setState(() => _q = h); _searchTmdb(h); },
@@ -1990,7 +2097,7 @@ class _MeScreenState extends State<MeScreen> {
                 ])),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.white),
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => _vipActive ? const OrderListScreen() : const VipScreen())),
+         onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => _vipActive ? const OrderListScreen() : const VipScreen())),
                   child: Text(_vipActive ? Lang.t('orderList') : Lang.t('subscribe'), style: const TextStyle(color: Colors.black)),
                 ),
               ]),
