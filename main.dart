@@ -1,7 +1,8 @@
 // FLIX - Stream Unlimited Movies & TV Shows
 // Flutter + Firebase (Firestore) + local fallback
-// If Firebase is NOT connected yet, the app still runs with sample movies
-// and admin-added movies saved locally. Connect Firebase later (see README).
+// If Firebase is NOT connected yet, the app runs with admin-added
+// movies saved locally (no sample / placeholder movies any more).
+// Connect Firebase later (see README).
 // IMPORTANT: Only add videos you own or have a licence for. The videoUrl
 // field must be YOUR hosted link (Firebase Storage / your server), not a
 // link copied from another streaming site.
@@ -34,6 +35,18 @@ const Color kGrey = Color(0xFF8A94A6);
 // in the repo - the workflow fills it in.
 const String kBuildTag = 'dev';
 const String kRepo = 'AbdulMannan2613/Flix';
+
+// UPI payment (1 Nov: Dino). ONLY the UPI ID from his FamApp
+// screenshot is used here - no name, balance or any other
+// screenshot detail. The QR shown on the payment screen is
+// generated in-app from this ID (qr_flutter is already a
+// dependency), so no QR image file is needed in the repo - the
+// phone-only workflow only copies main.dart / pubspec.yaml.
+// VERIFY BEFORE PUBLISHING: if this ID is mistyped, payments
+// go to the wrong account or fail. Check the ID shown in the
+// app against the FamApp screen.
+const String kUpiId = 'mannanbhaii@fam';
+const String kUpiPayee = 'Flix';
 
 /// Latest Flix release from GitHub. Returns tag + direct APK download URL.
 class UpdateChecker {
@@ -69,11 +82,11 @@ class UpdateChecker {
     if (p.getString('dismissed_update_tag') == latest.tag) return;
     if (!context.mounted) return;
     final go = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: const Text('New version available'),
-      content: const Text('A new version of Flix is available with the latest changes.\n\nTap Download to get the new APK. The file will always be called app-release.apk - that is the new version, even if the name looks the same as the old file.'),
+      title: Text(Lang.t('newVersion')),
+      content: Text(Lang.t('newVersionBody')),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Later')),
-        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white), onPressed: () => Navigator.pop(context, true), child: const Text('Download', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(Lang.t('later'))),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white), onPressed: () => Navigator.pop(context, true), child: Text(Lang.t('downloadBtn'), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
       ],
     ));
     if (go == true) {
@@ -332,24 +345,316 @@ void main() async {
       ),
     );
   } catch (_) {
-    // Firebase not connected yet - app runs on local sample data.
+    // Firebase not connected yet - app runs on local data.
   }
+  await Lang.load();
   runApp(const FlixApp());
+}
+
+// ---------------- APP LANGUAGE (English / Hindi) ----------------
+// The Me-screen "Language Switching" option used to only show a
+// SnackBar and change nothing. Now the choice is saved and Flix's
+// own text (menus, buttons, headings) actually changes, and the
+// whole app rebuilds at once when it changes.
+// Movie titles/descriptions come from TMDB in English and are NOT
+// translated - only Flix's own interface text is. Genre and sort
+// filter names also stay in English: they match the movie data.
+// Tamil / Telugu / Malayalam have no translations yet, so they
+// are not offered as options - an option must never look broken.
+class Lang {
+  static const _key = 'app_language';
+  static final ValueNotifier<String> current = ValueNotifier('en');
+  static String get code => current.value;
+  static bool get isHindi => code == 'hi';
+
+  static Future<void> load() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final saved = p.getString(_key);
+      if (saved == 'hi' || saved == 'en') current.value = saved!;
+    } catch (_) {}
+  }
+
+  static Future<void> set(String code) async {
+    if (code != 'en' && code != 'hi') return;
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_key, code);
+    } catch (_) {}
+    current.value = code;
+  }
+
+  static String t(String key) {
+    if (isHindi) {
+      final hi = _hi[key];
+      if (hi != null) return hi;
+    }
+    return _en[key] ?? key;
+  }
+
+  // {q} / {n} / {t} are replaced by the caller (see tr()).
+  static String tr(String key, String placeholder, String value) =>
+      t(key).replaceAll(placeholder, value);
+
+  static const _en = <String, String>{
+    'navHome': 'Home',
+    'navCategories': 'Categories',
+    'navMe': 'Me',
+    'searchHint': 'Search movies, TV shows...',
+    'search': 'Search',
+    'refresh': 'Refresh',
+    'trending': 'Trending Movies',
+    'popular': 'Popular Movies',
+    'loadMore': 'Aur Movies Dikhao',
+    'loading': 'Loading...',
+    'noMovies': 'No movies yet.',
+    'noMoviesHint': 'Refresh, or add one from the Admin panel.',
+    'catTitle': 'Categories',
+    'all': 'All',
+    'typeMovies': 'Movies',
+    'typeTv': 'TV Shows',
+    'typeWeb': 'Web Series',
+    'noCategory': 'No movies in this category yet.\nAdd one from the Admin panel.',
+    'sortPopularity': 'Popularity',
+    'sortLatest': 'Latest',
+    'sortTop': 'Top today',
+    'searchFieldHint': 'Title / Actor / Director',
+    'cancel': 'Cancel',
+    'searchHistory': 'Search History',
+    'nothingSearched': 'Nothing searched yet',
+    'popularSearches': 'Popular Searches',
+    'noExactMatch': 'No exact match for "{q}"',
+    'relatedMovies': 'Related movies you may like:',
+    'watchNow': 'Watch Now',
+    'download': 'Download',
+    'share': 'Share',
+    'favorite': 'Favorite',
+    'saved': 'Saved',
+    'description': 'Description',
+    'episodes': 'Episodes',
+    'episodesIn': '{n} episodes in this {t}',
+    'episode': 'Episode',
+    'nextEpisode': 'Next Episode',
+    'lastEpisode': 'This is the last episode',
+    'playingEpisode': 'Playing Episode',
+    'adminPin': 'Admin PIN',
+    'enterPin': 'Enter admin PIN',
+    'unlock': 'Unlock',
+    'wrongPin': 'Wrong PIN',
+    'meMovie': 'Movie',
+    'vipJoin': 'Join VIP and enjoy ad-free viewing of all videos',
+    'vipDiscount': '40%+ discount currently!',
+    'subscribe': 'Subscribe',
+    'tileShare': 'Share',
+    'tileLanguage': 'Language Switching',
+    'tileHistory': 'History',
+    'tileDownloads': 'My download',
+    'tileFavorites': 'My Favorites',
+    'tileOrders': 'Order list',
+    'tileFeedback': 'Feedback',
+    'tileSupport': 'Official customer service',
+    'chooseLanguage': 'Choose language',
+    'languageSet': 'Language set to',
+    'history': 'History',
+    'noHistory': 'No watch history yet.\nPlay a movie and it will appear here.',
+    'remaining': 'Remaining',
+    'myDownloads': 'My download',
+    'downloading': 'Downloading',
+    'downloaded': 'Downloaded',
+    'noContent': 'No Content yet',
+    'noDownloads': 'No downloaded movies yet.\nTap Download on a movie details page.',
+    'downloadedTap': 'Downloaded • Tap to play offline',
+    'myFavorites': 'My Favorites',
+    'noFavorites': 'No favorites yet.',
+    'orderList': 'Order list',
+    'notPurchased': 'Not purchased VIP plan yet',
+    'notPurchasedSub': 'You have not purchased a VIP plan yet.',
+    'purchasedPlan': 'Purchased plan:',
+    'statusPurchased': 'Status: Purchased',
+    'payment': 'Payment',
+    'vipBenefits': 'VIP benefits',
+    'benefit1': '✓  Exempt video ads on the home page, play, download and pause.',
+    'benefit2': '✓  Unlimited download opportunities',
+    'benefit3': '✓  More than 5 million HD movie resources',
+    'next': 'Next',
+    'promotion': 'Promotion',
+    'promotionRecord': 'Promotion record',
+    'promoted': 'Promoted {n} person',
+    'daysAdFree': 'You have {n} days ad-free',
+    'myCode': 'My invitation code:',
+    'shareNow': 'Share now',
+    'feedback': 'Feedback',
+    'feedbackHint': 'Tell us what to improve...',
+    'send': 'Send',
+    'customerService': 'Customer Service',
+    'customerServiceBody': 'Email us from the address you used for Flix. Support replies within 1-2 working days.',
+    'newVersion': 'New version available',
+    'newVersionBody': 'A new version of Flix is available with the latest changes.\n\nTap Download to get the new APK. The file will always be called app-release.apk - that is the new version, even if the name looks the same as the old file.',
+    'later': 'Later',
+    'downloadBtn': 'Download',
+    'noVideo': 'No video file for this TMDB listing. TMDB gives details and posters only, not a full movie file.',
+    'downloadedMsg': 'Downloaded. Find it in Me > My download.',
+    'tmdbOnly': 'This is a TMDB listing: details and poster only. No full-movie video file is available for it in Flix.',
+    'paySecureTitle': '100% Safe & Secure',
+    'paySecureBody': 'Payment happens in your UPI app (Google Pay / PhonePe / Paytm). Flix never sees your bank details or UPI PIN.',
+    'scanQr': 'Scan with any UPI app',
+    'payInUpi': 'Pay in UPI App',
+    'copyUpi': 'Copy UPI ID',
+    'copied': 'UPI ID copied',
+    'iHavePaid': 'I Have Paid',
+    'confirmTitle': 'Confirm Payment',
+    'utrHint': 'UTR / Transaction ID from your UPI app (optional)',
+    'utrHelp': 'You will find it in your UPI app payment receipt. VIP turns on after you confirm.',
+    'activate': 'Activate VIP',
+    'vipActivated': 'VIP activated! Ads are now off.',
+    'noUpiApp': 'No UPI app found. Scan the QR with any UPI app.',
+    'vipActive': 'VIP is active - enjoy ad-free viewing',
+    'payExact': 'Pay the exact amount shown',
+    'orderAmount': 'Amount',
+    'orderUtr': 'UTR / Transaction ID',
+    'orderDate': 'Date',
+    'orderExpiry': 'Valid until',
+  };
+
+  static const _hi = <String, String>{
+    'navHome': 'होम',
+    'navCategories': 'कैटेगरी',
+    'navMe': 'मैं',
+    'searchHint': 'मूवी, टीवी शो खोजें...',
+    'search': 'खोजें',
+    'refresh': 'रीफ़्रेश करें',
+    'trending': 'ट्रेंडिंग मूवीज़',
+    'popular': 'लोकप्रिय मूवीज़',
+    'loadMore': 'और मूवीज़ दिखाओ',
+    'loading': 'लोड हो रहा है...',
+    'noMovies': 'अभी कोई मूवी नहीं है।',
+    'noMoviesHint': 'रीफ़्रेश करें, या एडमिन पैनल से जोड़ें।',
+    'catTitle': 'कैटेगरी',
+    'all': 'सभी',
+    'typeMovies': 'मूवीज़',
+    'typeTv': 'टीवी शो',
+    'typeWeb': 'वेब सीरीज़',
+    'noCategory': 'इस कैटेगरी में अभी कोई मूवी नहीं है।\nएडमिन पैनल से जोड़ें।',
+    'sortPopularity': 'लोकप्रियता',
+    'sortLatest': 'नवीनतम',
+    'sortTop': 'आज के टॉप',
+    'searchFieldHint': 'नाम / अभिनेता / निर्देशक',
+    'cancel': 'रद्द करें',
+    'searchHistory': 'खोज इतिहास',
+    'nothingSearched': 'अभी कुछ खोजा नहीं गया',
+    'popularSearches': 'लोकप्रिय खोजें',
+    'noExactMatch': '"{q}" के लिए कोई सटीक नतीजा नहीं',
+    'relatedMovies': 'आपको ये संबंधित मूवीज़ पसंद आ सकती हैं:',
+    'watchNow': 'अभी देखें',
+    'download': 'डाउनलोड',
+    'share': 'शेयर करें',
+    'favorite': 'पसंदीदा',
+    'saved': 'सहेजा गया',
+    'description': 'विवरण',
+    'episodes': 'एपिसोड',
+    'episodesIn': 'इस {t} में {n} एपिसोड',
+    'episode': 'एपिसोड',
+    'nextEpisode': 'अगला एपिसोड',
+    'lastEpisode': 'यह आखिरी एपिसोड है',
+    'playingEpisode': 'एपिसोड चल रहा है',
+    'adminPin': 'एडमिन PIN',
+    'enterPin': 'एडमिन PIN डालें',
+    'unlock': 'अनलॉक करें',
+    'wrongPin': 'गलत PIN',
+    'meMovie': 'मूवी',
+    'vipJoin': 'VIP जॉइन करें और सभी वीडियो बिना विज्ञापन देखें',
+    'vipDiscount': 'अभी 40%+ छूट!',
+    'subscribe': 'सब्सक्राइब करें',
+    'tileShare': 'शेयर करें',
+    'tileLanguage': 'भाषा बदलें',
+    'tileHistory': 'इतिहास',
+    'tileDownloads': 'मेरे डाउनलोड',
+    'tileFavorites': 'मेरे पसंदीदा',
+    'tileOrders': 'ऑर्डर सूची',
+    'tileFeedback': 'प्रतिक्रिया',
+    'tileSupport': 'आधिकारिक ग्राहक सेवा',
+    'chooseLanguage': 'भाषा चुनें',
+    'languageSet': 'भाषा सेट हो गई:',
+    'history': 'इतिहास',
+    'noHistory': 'अभी कोई देखने का इतिहास नहीं है।\nकोई मूवी चलाएँ, वह यहाँ दिखेगी।',
+    'remaining': 'बचा हुआ',
+    'myDownloads': 'मेरे डाउनलोड',
+    'downloading': 'डाउनलोड हो रहा है',
+    'downloaded': 'डाउनलोड हो गया',
+    'noContent': 'अभी कोई सामग्री नहीं',
+    'noDownloads': 'अभी कोई मूवी डाउनलोड नहीं हुई है।\nमूवी के विवरण पेज पर डाउनलोड दबाएँ।',
+    'downloadedTap': 'डाउनलोड हो गया • ऑफ़लाइन चलाने के लिए टैप करें',
+    'myFavorites': 'मेरे पसंदीदा',
+    'noFavorites': 'अभी कोई पसंदीदा नहीं है।',
+    'orderList': 'ऑर्डर सूची',
+    'notPurchased': 'अभी VIP प्लान नहीं खरीदा गया है',
+    'notPurchasedSub': 'आपने अभी तक VIP प्लान नहीं खरीदा है।',
+    'purchasedPlan': 'खरीदा गया प्लान:',
+    'statusPurchased': 'स्थिति: खरीदा गया',
+    'payment': 'भुगतान',
+    'vipBenefits': 'VIP लाभ',
+    'benefit1': '✓  होम पेज, प्ले, डाउनलोड और पॉज़ पर वीडियो विज्ञापनों से छूट।',
+    'benefit2': '✓  असीमित डाउनलोड अवसर',
+    'benefit3': '✓  50 लाख से ज़्यादा HD मूवी संसाधन',
+    'next': 'आगे बढ़ें',
+    'promotion': 'प्रमोशन',
+    'promotionRecord': 'प्रमोशन रिकॉर्ड',
+    'promoted': '{n} व्यक्ति को प्रचारित किया',
+    'daysAdFree': 'आपके पास {n} दिन विज्ञापन-मुक्त हैं',
+    'myCode': 'मेरा आमंत्रण कोड:',
+    'shareNow': 'अभी शेयर करें',
+    'feedback': 'प्रतिक्रिया',
+    'feedbackHint': 'बताएँ कि क्या बेहतर किया जाए...',
+    'send': 'भेजें',
+    'customerService': 'ग्राहक सेवा',
+    'customerServiceBody': 'उसी ईमेल पते से ईमेल करें जिसका उपयोग आपने Flix के लिए किया था। सहायता 1-2 कार्य दिवसों में जवाब देती है।',
+    'newVersion': 'नया वर्शन उपलब्ध है',
+    'newVersionBody': 'Flix का नया वर्शन नवीनतम बदलावों के साथ उपलब्ध है।\n\nनया APK पाने के लिए डाउनलोड दबाएँ। फ़ाइल का नाम हमेशा app-release.apk ही रहेगा - नाम एक जैसा दिखे, तब भी वह नया वर्शन है।',
+    'later': 'बाद में',
+    'downloadBtn': 'डाउनलोड',
+    'noVideo': 'इस TMDB सूची के लिए कोई वीडियो फ़ाइल नहीं है। TMDB केवल विवरण और पोस्टर देता है, पूरी मूवी फ़ाइल नहीं।',
+    'downloadedMsg': 'डाउनलोड हो गया। Me > My download में देखें।',
+    'tmdbOnly': 'यह TMDB सूची है: केवल विवरण और पोस्टर। Flix में इसके लिए कोई पूरी मूवी वीडियो फ़ाइल उपलब्ध नहीं है।',
+    'paySecureTitle': '100% सुरक्षित',
+    'paySecureBody': 'भुगतान आपके UPI ऐप (Google Pay / PhonePe / Paytm) में होता है। Flix आपके बैंक विवरण या UPI PIN कभी नहीं देखता।',
+    'scanQr': 'किसी भी UPI ऐप से स्कैन करें',
+    'payInUpi': 'UPI ऐप में भुगतान करें',
+    'copyUpi': 'UPI ID कॉपी करें',
+    'copied': 'UPI ID कॉपी हो गया',
+    'iHavePaid': 'मैंने भुगतान कर दिया है',
+    'confirmTitle': 'भुगतान की पुष्टि करें',
+    'utrHint': 'अपने UPI ऐप से UTR / ट्रांज़ैक्शन ID (वैकल्पिक)',
+    'utrHelp': 'यह आपको अपने UPI ऐप की भुगतान रसीद में मिलेगा। पुष्टि करने के बाद VIP चालू हो जाएगा।',
+    'activate': 'VIP चालू करें',
+    'vipActivated': 'VIP चालू हो गया! अब विज्ञापन बंद हैं।',
+    'noUpiApp': 'कोई UPI ऐप नहीं मिला। QR को किसी भी UPI ऐप से स्कैन करें।',
+    'vipActive': 'VIP चालू है - बिना विज्ञापन देखें',
+    'payExact': 'दिखाई गई सटीक राशि का भुगतान करें',
+    'orderAmount': 'राशि',
+    'orderUtr': 'UTR / ट्रांज़ैक्शन ID',
+    'orderDate': 'तारीख',
+    'orderExpiry': 'इस तारीख तक मान्य',
+  };
 }
 
 class FlixApp extends StatelessWidget {
   const FlixApp({super.key});
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Flix',
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: kBg,
-        colorScheme: const ColorScheme.dark(primary: kRed, surface: kBg),
-        appBarTheme: const AppBarTheme(backgroundColor: kBg, elevation: 0),
+    // Rebuild the whole app when the language changes, so every
+    // screen switches text at once.
+    return ValueListenableBuilder<String>(
+      valueListenable: Lang.current,
+      builder: (context, _, __) => MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'Flix',
+        theme: ThemeData.dark().copyWith(
+          scaffoldBackgroundColor: kBg,
+          colorScheme: const ColorScheme.dark(primary: kRed, surface: kBg),
+          appBarTheme: const AppBarTheme(backgroundColor: kBg, elevation: 0),
+        ),
+        home: const SplashScreen(),
       ),
-      home: const SplashScreen(),
     );
   }
 }
@@ -407,24 +712,56 @@ class Movie {
 }
 
 List<Movie> sampleMovies() {
-  const v = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
-  const v2 = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
-  String p(String s) => 'https://picsum.photos/seed/$s/400/600';
-  return [
-    Movie(id: 's1', title: 'The Last Horizon', description: 'A hero returns to save his city from a forgotten enemy. Epic action, big battles and a fight for the future.', category: 'Action', language: 'Hindi', posterUrl: p('flix1'), videoUrl: v, type: 'Movie', year: 2025, rating: 8.3, isTrending: true),
-    Movie(id: 's2', title: 'City of Shadows', description: 'A detective follows a trail through the dark streets of the city.', category: 'Thriller', language: 'Tamil', posterUrl: p('flix2'), videoUrl: v2, type: 'Movie', year: 2026, rating: 8.8, isTrending: true),
-    Movie(id: 's3', title: 'Love in Paris', description: 'Two strangers meet in Paris and change each other\'s lives forever.', category: 'Romance', language: 'English', posterUrl: p('flix3'), videoUrl: v, type: 'Movie', year: 2024, rating: 7.9, isTrending: true),
-    Movie(id: 's4', title: 'Jungle Quest', description: 'An adventure deep into a jungle no one has returned from.', category: 'Adventure', language: 'Telugu', posterUrl: p('flix4'), videoUrl: v2, type: 'Movie', year: 2025, rating: 8.1, isTrending: true),
-    Movie(id: 's5', title: 'Night Haunting', description: 'A family moves into an old house and discovers its secret.', category: 'Horror', language: 'Malayalam', posterUrl: p('flix5'), videoUrl: v, type: 'Movie', year: 2023, rating: 7.4, isTrending: true),
-    Movie(id: 's6', title: 'Family Reunion', description: 'A warm family drama about coming home after many years.', category: 'Family', language: 'Hindi', posterUrl: p('flix6'), videoUrl: v2, type: 'Movie', year: 2024, rating: 8.0),
-    Movie(id: 's7', title: 'Space Voyage', description: 'A crew travels beyond the stars to find a new home.', category: 'Action', language: 'English', posterUrl: p('flix7'), videoUrl: v, type: 'TV Show', year: 2026, rating: 9.1),
-    Movie(id: 's8', title: 'Comedy Nights', description: 'Non-stop comedy from a group of friends who always get into trouble.', category: 'Comedy', language: 'Hindi', posterUrl: p('flix8'), videoUrl: v2, type: 'TV Show', year: 2025, rating: 7.7),
-    Movie(id: 's9', title: 'River Valley', description: 'A web series about a small town, a big secret, and the people caught in between.', category: 'Drama', language: 'Hindi', posterUrl: p('flix9'), videoUrl: v, type: 'Web Series', year: 2026, rating: 8.4, isTrending: true, episodes: [v, v2, 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4']),
-  ];
+  // Sample movies REMOVED (1 Nov: Dino). Home must never show fake
+  // placeholder movies again. If Firestore / TMDB / local storage
+  // are all empty, Home shows an empty state instead. Kept as a
+  // function (returning no movies) so older call sites still compile.
+  return [];
 }
 
 // ---------------- REPOSITORY + LOCAL STORAGE ----------------
 class MovieRepo {
+  // Sample ids s1..s9 may still be saved on phones from older
+  // builds (Admin saved the whole list locally). They must never
+  // show again, even from saved local storage.
+  static bool _isSampleId(String id) => RegExp(r'^s[0-9]$').hasMatch(id);
+
+  // FAST first paint (1 Nov: Dino - bina VPN ke app bhot slow khulta
+  // hai). Home must NOT wait for the network before showing
+  // anything: the Firestore server read (15s) + TMDB (6s) + cache
+  // fallback could keep Home on the spinner for 20+ seconds on a
+  // slow connection, even though the seeded list is already on the
+  // phone. getCached() reads ONLY on-device data - Firestore's
+  // offline cache + the phone's saved TMDB list + local admin
+  // movies - so it returns in well under a second. Home shows this
+  // at once, then refreshes in the background with getAll().
+  static Future<List<Movie>> getCached() async {
+    final local = await _localMovies();
+    List<Movie> base = local;
+    try {
+      if (Firebase.apps.isNotEmpty) {
+        final snap = await FirebaseFirestore.instance
+            .collection('movies')
+            .get(const GetOptions(source: Source.cache))
+            .timeout(const Duration(seconds: 3));
+        if (snap.docs.isNotEmpty) {
+          final fire = snap.docs.map((d) => Movie.fromMap(d.id, d.data())).toList();
+          final ids = fire.map((m) => m.id).toSet();
+          base = [...fire, ...local.where((m) => !ids.contains(m.id))];
+        }
+      }
+    } catch (_) {}
+    base = base
+        .where((m) => !_isSampleId(m.id) && !(m.id.startsWith('tmdb_') && m.language.toUpperCase() != 'HI'))
+        .toList();
+    final cached = await _loadTmdbCache();
+    if (cached.isNotEmpty) {
+      final ids = cached.map((m) => m.id).toSet();
+      return [...cached, ...base.where((m) => !ids.contains(m.id))];
+    }
+    return base;
+  }
+
   static Future<List<Movie>> getAll({int hindiPages = 6}) async {
     final local = await _localMovies();
     List<Movie> base;
@@ -441,7 +778,7 @@ class MovieRepo {
           snap = await FirebaseFirestore.instance.collection('movies').get().timeout(const Duration(seconds: 15));
         } catch (_) {
           try {
-            snap = await FirebaseFirestore.instance.collection('movies').get(const GetOptions(source: Source.cache)).timeout(const Duration(seconds: 5));
+            snap = await FirebaseFirestore.instance.collection('movies').get(const GetOptions(source: Source.cache)).timeout(const Duration(seconds: 3));
           } catch (_) {}
         }
         if (snap != null && snap.docs.isNotEmpty) {
@@ -449,13 +786,13 @@ class MovieRepo {
           final ids = fire.map((m) => m.id).toSet();
           base = [...fire, ...local.where((m) => !ids.contains(m.id))];
         } else {
-          base = local.isEmpty ? sampleMovies() : local;
+          base = local;
         }
       } else {
-        base = local.isEmpty ? sampleMovies() : local;
+        base = local;
       }
     } catch (_) {
-      base = local.isEmpty ? sampleMovies() : local;
+      base = local;
     }
     // Drop the STALE saved TMDB snapshot: Admin's Trending manager
     // saves the whole getAll() list into local storage, so the old
@@ -465,7 +802,7 @@ class MovieRepo {
     // Only saved TMDB movies already badged HI are kept; Admin /
     // Firestore movies (non-tmdb ids) are always kept.
     base = base
-        .where((m) => !(m.id.startsWith('tmdb_') && m.language.toUpperCase() != 'HI'))
+        .where((m) => !_isSampleId(m.id) && !(m.id.startsWith('tmdb_') && m.language.toUpperCase() != 'HI'))
         .toList();
     // TMDB automatic list on top (no Nexstream, no manual upload needed
     // for these titles). Admin / Firestore movies are kept after them.
@@ -511,9 +848,10 @@ class MovieRepo {
       final ids = cached.map((m) => m.id).toSet();
       return [...cached, ...base.where((m) => !ids.contains(m.id))];
     }
-    // If the stale-snapshot filter emptied the base list and TMDB
-    // gave nothing, show the sample list - never an empty Home.
-    return base.isEmpty ? sampleMovies() : base;
+    // If the filters emptied the base list and TMDB gave nothing,
+    // return the (possibly empty) base list - Home shows an empty
+    // state instead of fake sample movies.
+    return base;
   }
 
   static Future<void> _saveTmdbCache(List<Movie> movies) async {
@@ -554,11 +892,15 @@ class MovieRepo {
   static Future<List<Movie>> _localMovies() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('admin_movies');
-    if (raw == null) return sampleMovies();
+    if (raw == null) return [];
     try {
       final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
-      return list.map((m) => Movie.fromMap(m['id'] ?? '', m)).toList();
-    } catch (_) { return sampleMovies(); }
+      // Drop sample movies saved by older builds.
+      return list
+          .map((m) => Movie.fromMap(m['id'] ?? '', m))
+          .where((m) => !_isSampleId(m.id))
+          .toList();
+    } catch (_) { return []; }
   }
 
   static Future<void> saveLocal(List<Movie> movies) async {
@@ -576,7 +918,7 @@ class MovieRepo {
     final all = await _localMovies();
     // Avoid duplicating sample movies on first admin save
     final base = all.where((x) => !x.id.startsWith('s')).toList();
-    await saveLocal([...sampleMovies(), ...base, m]);
+    await saveLocal([...base, m]);
   }
 
   static Future<void> deleteMovie(String id) async {
@@ -662,6 +1004,39 @@ class Prefs {
   static Future<String?> vipPlan() async {
     final p = await SharedPreferences.getInstance();
     return p.getString('vip_plan');
+  }
+  // VIP order from a UPI payment. There is no payment gateway or
+  // backend, so Flix cannot verify a UPI payment automatically:
+  // VIP turns on when the user confirms payment and (optionally)
+  // enters the UTR / transaction ID from their UPI app receipt.
+  // Expiry = purchase date + months * 30 days. Ads must only ever
+  // be shown when isVipActive() is false (no ad code exists yet).
+  static Future<void> saveVipOrder({required String plan, required int amount, required int months, String utr = ''}) async {
+    final p = await SharedPreferences.getInstance();
+    final expiry = DateTime.now().add(Duration(days: months * 30));
+    await p.setString('vip_plan', plan);
+    await p.setInt('vip_amount', amount);
+    await p.setInt('vip_expiry', expiry.millisecondsSinceEpoch);
+    await p.setString('vip_utr', utr);
+    await p.setString('vip_date', DateTime.now().toIso8601String());
+  }
+  static Future<bool> isVipActive() async {
+    final p = await SharedPreferences.getInstance();
+    final expiry = p.getInt('vip_expiry');
+    if (expiry != null) return DateTime.now().millisecondsSinceEpoch < expiry;
+    // Older builds saved a plan with no expiry - keep it active.
+    final plan = p.getString('vip_plan');
+    return plan != null && plan.isNotEmpty;
+  }
+  static Future<Map<String, String>> vipOrder() async {
+    final p = await SharedPreferences.getInstance();
+    return {
+      'plan': p.getString('vip_plan') ?? '',
+      'amount': '${p.getInt('vip_amount') ?? 0}',
+      'utr': p.getString('vip_utr') ?? '',
+      'date': p.getString('vip_date') ?? '',
+      'expiry': '${p.getInt('vip_expiry') ?? 0}',
+    };
   }
   static Future<int> invitedCount() async {
     final p = await SharedPreferences.getInstance();
@@ -826,10 +1201,10 @@ class _MainShellState extends State<MainShell> {
         selectedItemColor: Colors.white, unselectedItemColor: kGrey,
         currentIndex: _index,
         onTap: (i) => setState(() => _index = i),
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
-          BottomNavigationBarItem(icon: Icon(Icons.folder), label: 'Categories'),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Me'),
+        items: [
+          BottomNavigationBarItem(icon: const Icon(Icons.home), label: Lang.t('navHome')),
+          BottomNavigationBarItem(icon: const Icon(Icons.folder), label: Lang.t('navCategories')),
+          BottomNavigationBarItem(icon: const Icon(Icons.person), label: Lang.t('navMe')),
         ],
       ),
     );
@@ -849,10 +1224,26 @@ class _HomeScreenState extends State<HomeScreen> {
   int _hindiPages = 6;
   bool _loadingMore = false;
   Timer? _timer;
+  // Generation guard: a stale background refresh must never
+  // overwrite a newer load (Refresh tap / "Aur Movies Dikhao").
+  int _loadGen = 0;
+
+  // Show the on-device list at once, refresh in the background.
+  // Home no longer blanks to a spinner while the network is slow:
+  // the cached list stays on screen and is swapped for the fresh
+  // list only when getAll() returns.
+  void _refreshInBackground() {
+    final gen = ++_loadGen;
+    MovieRepo.getAll(hindiPages: _hindiPages).then((movies) {
+      if (!mounted || gen != _loadGen) return;
+      setState(() => _future = Future.value(movies));
+    }).catchError((_) {});
+  }
 
   // "Aur Movies Dikhao": load 4 more Hindi pages (up to 10 pages).
   Future<void> _loadMore() async {
     if (_loadingMore || _hindiPages >= 10) return;
+    ++_loadGen;
     setState(() {
       _loadingMore = true;
       _hindiPages += 4;
@@ -867,7 +1258,10 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _future = MovieRepo.getAll(hindiPages: _hindiPages);
+    // Fast open: saved list first (under a second), fresh list
+    // arrives in the background - no long spinner without VPN.
+    _future = MovieRepo.getCached();
+    _refreshInBackground();
     // Check for a new version once, shortly after Home opens.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.delayed(const Duration(seconds: 2), () {
@@ -900,6 +1294,29 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (context, snap) {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: kRed));
           final movies = snap.data!;
+          // No sample movies any more: an empty catalogue shows an
+          // empty state with Refresh / Search, never fake movies.
+          if (movies.isEmpty) {
+            return Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.movie_outlined, size: 64, color: kGrey),
+                const SizedBox(height: 12),
+                Text(Lang.t('noMovies'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                Text(Lang.t('noMoviesHint'), style: const TextStyle(color: kGrey), textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white),
+                  onPressed: _refreshInBackground,
+                  child: Text(Lang.t('refresh'), style: const TextStyle(fontWeight: FontWeight.bold)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SearchScreen())),
+                  child: Text(Lang.t('search')),
+                ),
+              ]),
+            );
+          }
           final trending = movies.where((m) => m.isTrending).toList();
           // Slider: TMDB Hindi movies first (English titles, HI badge).
           // Without this, the sample movies' isTrending flags hijacked
@@ -919,18 +1336,20 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                         decoration: BoxDecoration(color: kCard2, borderRadius: BorderRadius.circular(10)),
-                        child: const Row(children: [Icon(Icons.search, color: kGrey), SizedBox(width: 8), Text('Search movies, TV shows...', style: TextStyle(color: kGrey))]),
+                        child: Row(children: [const Icon(Icons.search, color: kGrey), const SizedBox(width: 8), Text(Lang.t('searchHint'), style: const TextStyle(color: kGrey))]),
                       ),
                     ),
                   ),
                   // Retry: reload the list without restarting the app
                   // (useful when the network/VPN just came back).
-                  IconButton(icon: const Icon(Icons.refresh), onPressed: () => setState(() => _future = MovieRepo.getAll(hindiPages: _hindiPages))),
+                  // Keeps the shown list on screen while refreshing,
+                  // instead of blanking Home to a spinner.
+                  IconButton(icon: const Icon(Icons.refresh), onPressed: _refreshInBackground),
                   IconButton(icon: const Icon(Icons.history), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()))),
                   IconButton(icon: const Icon(Icons.download), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DownloadsScreen()))),
                 ]),
               ),
-              const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('Trending Movies', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text(Lang.t('trending'), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
               const SizedBox(height: 10),
               SizedBox(
                 height: 220,
@@ -962,7 +1381,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 8),
               Row(mainAxisAlignment: MainAxisAlignment.center, children: List.generate(slider.length, (i) => Container(margin: const EdgeInsets.symmetric(horizontal: 3), width: _pageIndex == i ? 18.0 : 7.0, height: 7, decoration: BoxDecoration(color: _pageIndex == i ? kRed : Colors.white54, borderRadius: BorderRadius.circular(4))))),
               const SizedBox(height: 20),
-              const Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('Popular Movies', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Text(Lang.t('popular'), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
               const SizedBox(height: 10),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -981,7 +1400,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white),
                       onPressed: _loadingMore ? null : _loadMore,
-                      child: Text(_loadingMore ? 'Loading...' : 'Aur Movies Dikhao', style: const TextStyle(fontWeight: FontWeight.bold)),
+                      child: Text(_loadingMore ? Lang.t('loading') : Lang.t('loadMore'), style: const TextStyle(fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ),
@@ -1011,13 +1430,23 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   final _years = ['All', '2026', '2025', '2024', '2023', '2022'];
   final _sorts = ['Popularity', 'Latest', 'Top today'];
 
+  // Filter values stay in English (they match the movie data);
+  // only their displayed labels are translated.
+  String _chipLabel(String e) {
+    if (e == 'All') return Lang.t('all');
+    if (e == 'Popularity') return Lang.t('sortPopularity');
+    if (e == 'Latest') return Lang.t('sortLatest');
+    if (e == 'Top today') return Lang.t('sortTop');
+    return e;
+  }
+
   Widget _chips(List<String> items, String selected, ValueChanged<String> onPick) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(children: items.map((e) => Padding(
         padding: const EdgeInsets.only(right: 10),
         child: ChoiceChip(
-          label: Text(e), selected: selected == e,
+          label: Text(_chipLabel(e)), selected: selected == e,
           selectedColor: kCard2, backgroundColor: Colors.transparent,
           labelStyle: TextStyle(color: selected == e ? Colors.white : kGrey, fontWeight: selected == e ? FontWeight.bold : FontWeight.normal),
           onSelected: (_) => setState(() => onPick(e)),
@@ -1033,7 +1462,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         Padding(
           padding: const EdgeInsets.only(right: 10),
           child: FilterChip(
-            label: const Text('All'), selected: _genresSelected.isEmpty,
+            label: Text(Lang.t('all')), selected: _genresSelected.isEmpty,
             selectedColor: kCard2, backgroundColor: Colors.transparent,
             labelStyle: TextStyle(color: _genresSelected.isEmpty ? Colors.white : kGrey, fontWeight: _genresSelected.isEmpty ? FontWeight.bold : FontWeight.normal),
             onSelected: (_) => setState(() => _genresSelected.clear()),
@@ -1061,7 +1490,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         Padding(
           padding: const EdgeInsets.all(12),
           child: Row(children: [
-            const Expanded(child: Center(child: Text('Categories', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)))),
+            Expanded(child: Center(child: Text(Lang.t('catTitle'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)))),
             IconButton(icon: const Icon(Icons.search), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SearchScreen()))),
           ]),
         ),
@@ -1069,11 +1498,11 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Column(children: [
             Row(children: [
-              ChoiceChip(label: const Text('Movies'), selected: _type == 'Movies', selectedColor: kCard2, onSelected: (_) => setState(() => _type = 'Movies')),
+              ChoiceChip(label: Text(Lang.t('typeMovies')), selected: _type == 'Movies', selectedColor: kCard2, onSelected: (_) => setState(() => _type = 'Movies')),
               const SizedBox(width: 10),
-              ChoiceChip(label: const Text('TV Shows'), selected: _type == 'TV Shows', selectedColor: kCard2, onSelected: (_) => setState(() => _type = 'TV Shows')),
+              ChoiceChip(label: Text(Lang.t('typeTv')), selected: _type == 'TV Shows', selectedColor: kCard2, onSelected: (_) => setState(() => _type = 'TV Shows')),
               const SizedBox(width: 10),
-              ChoiceChip(label: const Text('Web Series'), selected: _type == 'Web Series', selectedColor: kCard2, onSelected: (_) => setState(() => _type = 'Web Series')),
+              ChoiceChip(label: Text(Lang.t('typeWeb')), selected: _type == 'Web Series', selectedColor: kCard2, onSelected: (_) => setState(() => _type = 'Web Series')),
             ]),
             const SizedBox(height: 10),
             _genreChips(),
@@ -1095,7 +1524,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
               if (_year != 'All') list = list.where((m) => m.year.toString() == _year).toList();
               if (_sort == 'Latest') list.sort((a, b) => b.year.compareTo(a.year));
               else list.sort((a, b) => b.rating.compareTo(a.rating)); // Popularity + Top today
-              if (list.isEmpty) return const Center(child: Text('No movies in this category yet.\nAdd one from the Admin panel.', textAlign: TextAlign.center, style: TextStyle(color: kGrey)));
+              if (list.isEmpty) return Center(child: Text(Lang.t('noCategory'), textAlign: TextAlign.center, style: const TextStyle(color: kGrey)));
               return GridView.builder(
                 padding: const EdgeInsets.all(12),
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, childAspectRatio: 0.58, crossAxisSpacing: 8, mainAxisSpacing: 12),
@@ -1168,22 +1597,22 @@ class _SearchScreenState extends State<SearchScreen> {
         title: TextField(
           controller: _ctrl,
           autofocus: true,
-          decoration: const InputDecoration(hintText: 'Title / Actor / Director', border: InputBorder.none, hintStyle: TextStyle(color: kGrey)),
+          decoration: InputDecoration(hintText: Lang.t('searchFieldHint'), border: InputBorder.none, hintStyle: const TextStyle(color: kGrey)),
           onChanged: (v) { setState(() => _q = v); _searchTmdb(v); },
         ),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: Colors.white)))],
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(Lang.t('cancel'), style: const TextStyle(color: Colors.white)))],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (_q.isEmpty) ...[
             Row(children: [
-              const Expanded(child: Text('Search History', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+              Expanded(child: Text(Lang.t('searchHistory'), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
               IconButton(icon: const Icon(Icons.delete_outline, color: kGrey), onPressed: () async { await Prefs.clearSearch(); _load(); }),
             ]),
             const SizedBox(height: 8),
             if (_history.isEmpty)
-              const Text('Nothing searched yet', style: TextStyle(color: kGrey))
+              Text(Lang.t('nothingSearched'), style: const TextStyle(color: kGrey))
             else
               Wrap(spacing: 8, runSpacing: 8, children: _history.map((h) => InputChip(
                 label: Text(h), backgroundColor: kCard2,
@@ -1192,7 +1621,7 @@ class _SearchScreenState extends State<SearchScreen> {
                 onPressed: () { _ctrl.text = h; setState(() => _q = h); _searchTmdb(h); },
               )).toList()),
             const SizedBox(height: 24),
-            const Text('Popular Searches', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            Text(Lang.t('popularSearches'), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             ...popular.take(7).map((m) => ListTile(
               contentPadding: EdgeInsets.zero,
@@ -1204,9 +1633,9 @@ class _SearchScreenState extends State<SearchScreen> {
             )),
           ] else ...[
             if (results.isEmpty) ...[
-              Text('No exact match for "$_q"', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              Text(Lang.tr('noExactMatch', '{q}', _q), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               const SizedBox(height: 6),
-              const Text('Related movies you may like:', style: TextStyle(color: kGrey)),
+              Text(Lang.t('relatedMovies'), style: const TextStyle(color: kGrey)),
               const SizedBox(height: 12),
               GridView.builder(
                 shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
@@ -1255,7 +1684,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
   Future<void> _download() async {
     if (widget.movie.videoUrl.isEmpty && widget.movie.episodes.isEmpty) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No video file for this TMDB listing. TMDB gives details and posters only, not a full movie file.')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('noVideo'))));
       return;
     }
     try {
@@ -1266,7 +1695,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
       final list = p.getStringList('downloaded') ?? [];
       if (!list.contains(widget.movie.id)) list.add(widget.movie.id);
       await p.setStringList('downloaded', list);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Downloaded. Find it in Me > My download.')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('downloadedMsg'))));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: $e')));
     }
@@ -1303,7 +1732,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                   style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
                   onPressed: () async {
                     if (m.videoUrl.isEmpty && m.episodes.isEmpty) {
-                      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This is a TMDB listing: details and poster only. No full-movie video file is available for it in Flix.')));
+                      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('tmdbOnly'))));
                       return;
                     }
                     final hist = await getWatchHistory();
@@ -1312,27 +1741,27 @@ class _DetailsScreenState extends State<DetailsScreen> {
                     if (!context.mounted) return;
                     Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(movie: m, startAt: start)));
                   },
-                  icon: const Icon(Icons.play_arrow, color: Colors.white), label: const Text('Watch Now', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                  icon: const Icon(Icons.play_arrow, color: Colors.white), label: Text(Lang.t('watchNow'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
                 ),
               ),
               const SizedBox(height: 10),
               Row(children: [
-                Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? 'Saved' : 'Favorite'))),
+                Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? Lang.t('saved') : Lang.t('favorite')))),
                 const SizedBox(width: 10),
-                Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: const Text('Download'))),
+                Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: Text(Lang.t('download')))),
               ]),
               const SizedBox(height: 20),
-              const Text('Description', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(Lang.t('description'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               Text(m.description, style: const TextStyle(color: Colors.white70, height: 1.5)),
               if (m.type == 'TV Show' || m.type == 'Web Series') ...[
                 const SizedBox(height: 20),
-                Text('Episodes (${m.episodes.isNotEmpty ? m.episodes.length : 3})', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                Text('${Lang.t('episodes')} (${m.episodes.isNotEmpty ? m.episodes.length : 3})', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 4),
-                Text('${m.episodes.isNotEmpty ? m.episodes.length : 3} episodes in this ${m.type.toLowerCase()}', style: const TextStyle(color: kGrey)),
+                Text(Lang.tr('episodesIn', '{n}', '${m.episodes.isNotEmpty ? m.episodes.length : 3}').replaceAll('{t}', m.type.toLowerCase()), style: const TextStyle(color: kGrey)),
                 ...List.generate(m.episodes.isNotEmpty ? m.episodes.length : 3, (i) => ListTile(
                   leading: const Icon(Icons.play_circle_fill, color: kRed),
-                  title: Text('Episode ${i + 1}'),
+                  title: Text('${Lang.t('episode')} ${i + 1}'),
                   subtitle: Text(m.type),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(movie: m, startAt: 0, episodeIndex: i))),
@@ -1396,13 +1825,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() => _episodeIndex = index);
     await _init(_episodeUrls[index]);
     _advancing = false;
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Playing Episode ${index + 1}'), duration: const Duration(seconds: 2)));
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${Lang.t('playingEpisode')} ${index + 1}'), duration: const Duration(seconds: 2)));
   }
   void _playNext({bool auto = false}) {
     if (_episodeIndex + 1 < _episodeUrls.length) {
       _playEpisode(_episodeIndex + 1);
     } else if (!auto && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('This is the last episode')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('lastEpisode'))));
     }
   }
   @override
@@ -1444,7 +1873,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           if (_showControls && c != null && c.value.isInitialized) ...[
             Positioned(top: 16, left: 12, child: Row(children: [
               IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
-              Expanded(child: Text(_isSeries ? '${widget.movie.title} • Episode ${_episodeIndex + 1}' : widget.movie.title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
+              Expanded(child: Text(_isSeries ? '${widget.movie.title} • ${Lang.t('episode')} ${_episodeIndex + 1}' : widget.movie.title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
               PopupMenuButton<String>(
                 icon: const Icon(Icons.settings, color: Colors.white),
                 onSelected: (q) {
@@ -1475,10 +1904,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
               ]),
               if (_isSeries)
                 Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Text('Episode ${_episodeIndex + 1} of ${_episodeUrls.length}', style: const TextStyle(color: Colors.white70)),
+                  Text('${Lang.t('episode')} ${_episodeIndex + 1} of ${_episodeUrls.length}', style: const TextStyle(color: Colors.white70)),
                   if (_episodeIndex + 1 < _episodeUrls.length) ...[
                     const SizedBox(width: 12),
-                    TextButton.icon(onPressed: () => _playNext(), icon: const Icon(Icons.skip_next, color: Colors.white, size: 18), label: const Text('Next Episode', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+                    TextButton.icon(onPressed: () => _playNext(), icon: const Icon(Icons.skip_next, color: Colors.white, size: 18), label: Text(Lang.t('nextEpisode'), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
                   ],
                 ]),
             ])),
@@ -1498,8 +1927,13 @@ class MeScreen extends StatefulWidget {
 class _MeScreenState extends State<MeScreen> {
   String _username = '...';
   int _taps = 0;
+  bool _vipActive = false;
   @override
-  void initState() { super.initState(); Prefs.username().then((u) { if (mounted) setState(() => _username = u); }); }
+  void initState() {
+    super.initState();
+    Prefs.username().then((u) { if (mounted) setState(() => _username = u); });
+    Prefs.isVipActive().then((v) { if (mounted) setState(() => _vipActive = v); });
+  }
   void _onAvatarTap() async {
     _taps++;
     if (_taps >= 5) {
@@ -1507,11 +1941,11 @@ class _MeScreenState extends State<MeScreen> {
       // Admin panel is PIN-protected. Default PIN is 1234 (change it in Admin).
       final pinCtrl = TextEditingController();
       final entered = await showDialog<String>(context: context, builder: (_) => AlertDialog(
-        title: const Text('Admin PIN'),
-        content: TextField(controller: pinCtrl, obscureText: true, keyboardType: TextInputType.number, decoration: const InputDecoration(hintText: 'Enter admin PIN')),
+        title: Text(Lang.t('adminPin')),
+        content: TextField(controller: pinCtrl, obscureText: true, keyboardType: TextInputType.number, decoration: InputDecoration(hintText: Lang.t('enterPin'))),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(context, pinCtrl.text), child: const Text('Unlock')),
+          TextButton(onPressed: () => Navigator.pop(context), child: Text(Lang.t('cancel'))),
+          TextButton(onPressed: () => Navigator.pop(context, pinCtrl.text), child: Text(Lang.t('unlock'))),
         ],
       ));
       if (entered == null) return;
@@ -1520,7 +1954,7 @@ class _MeScreenState extends State<MeScreen> {
       if (entered == correct) {
         Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminScreen()));
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Wrong PIN')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('wrongPin'))));
       }
     }
   }
@@ -1541,7 +1975,7 @@ class _MeScreenState extends State<MeScreen> {
           ),
           const SizedBox(height: 8),
           Text(_username, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          const Text('Movie', style: TextStyle(color: kGrey)),
+          Text(Lang.t('meMovie'), style: const TextStyle(color: kGrey)),
           const SizedBox(height: 16),
           // VIP banner
           Padding(
@@ -1550,29 +1984,44 @@ class _MeScreenState extends State<MeScreen> {
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFFE8C88A), Color(0xFFD9A86A)]), borderRadius: BorderRadius.circular(12)),
               child: Row(children: [
-                const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Join VIP and enjoy ad-free viewing of all videos', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                  Text('40%+ discount currently!', style: TextStyle(color: Colors.black54)),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(_vipActive ? Lang.t('vipActive') : Lang.t('vipJoin'), style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  if (!_vipActive) Text(Lang.t('vipDiscount'), style: const TextStyle(color: Colors.black54)),
                 ])),
-                ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.white), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const VipScreen())), child: const Text('Subscribe', style: TextStyle(color: Colors.black))),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.white),
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => _vipActive ? const OrderListScreen() : const VipScreen())),
+                  child: Text(_vipActive ? Lang.t('orderList') : Lang.t('subscribe'), style: const TextStyle(color: Colors.black)),
+                ),
               ]),
             ),
           ),
           const SizedBox(height: 16),
-          _tile(Icons.share, 'Share', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ShareScreen()))),
-          _tile(Icons.language, 'Language Switching', () async {
-            final lang = await showDialog<String>(context: context, builder: (_) => SimpleDialog(title: const Text('Choose language'), children: ['English', 'Hindi', 'Tamil', 'Telugu', 'Malayalam'].map((l) => SimpleDialogOption(child: Text(l), onPressed: () => Navigator.pop(context, l))).toList()));
-            if (lang != null && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Language set to $lang')));
+          _tile(Icons.share, Lang.t('tileShare'), () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ShareScreen()))),
+          _tile(Icons.language, Lang.t('tileLanguage'), () async {
+            // Only English + Hindi have translations. The choice is
+            // saved and the whole app switches text at once.
+            final code = await showDialog<String>(context: context, builder: (_) => SimpleDialog(
+              title: Text(Lang.t('chooseLanguage')),
+              children: [
+                SimpleDialogOption(child: const Text('English'), onPressed: () => Navigator.pop(context, 'en')),
+                SimpleDialogOption(child: const Text('हिन्दी (Hindi)'), onPressed: () => Navigator.pop(context, 'hi')),
+              ],
+            ));
+            if (code != null) {
+              await Lang.set(code);
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${Lang.t('languageSet')} ${code == 'hi' ? 'Hindi' : 'English'}')));
+            }
           }),
-          _tile(Icons.history, 'History', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()))),
-          _tile(Icons.download, 'My download', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DownloadsScreen()))),
-          _tile(Icons.favorite_border, 'My Favorites', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FavoritesScreen()))),
-          _tile(Icons.receipt_long, 'Order list', () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrderListScreen()))),
-          _tile(Icons.feedback_outlined, 'Feedback', () {
-            showDialog(context: context, builder: (_) => AlertDialog(title: const Text('Feedback'), content: const TextField(decoration: InputDecoration(hintText: 'Tell us what to improve...')), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Send'))]));
+          _tile(Icons.history, Lang.t('tileHistory'), () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()))),
+          _tile(Icons.download, Lang.t('tileDownloads'), () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DownloadsScreen()))),
+          _tile(Icons.favorite_border, Lang.t('tileFavorites'), () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FavoritesScreen()))),
+          _tile(Icons.receipt_long, Lang.t('tileOrders'), () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrderListScreen()))),
+          _tile(Icons.feedback_outlined, Lang.t('tileFeedback'), () {
+            showDialog(context: context, builder: (_) => AlertDialog(title: Text(Lang.t('feedback')), content: TextField(decoration: InputDecoration(hintText: Lang.t('feedbackHint'))), actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(Lang.t('send')))]));
           }),
-          _tile(Icons.support_agent, 'Official customer service', () {
-            showDialog(context: context, builder: (_) => const AlertDialog(title: Text('Customer Service'), content: Text('Email us from the address you used for Flix. Support replies within 1-2 working days.')));
+          _tile(Icons.support_agent, Lang.t('tileSupport'), () {
+            showDialog(context: context, builder: (_) => AlertDialog(title: Text(Lang.t('customerService')), content: Text(Lang.t('customerServiceBody'))));
           }),
         ]),
       ),
@@ -1599,9 +2048,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('History'), actions: [IconButton(icon: const Icon(Icons.edit), onPressed: () async { final p = await SharedPreferences.getInstance(); await p.remove('watch_history'); _load(); })]),
+      appBar: AppBar(title: Text(Lang.t('history')), actions: [IconButton(icon: const Icon(Icons.edit), onPressed: () async { final p = await SharedPreferences.getInstance(); await p.remove('watch_history'); _load(); })]),
       body: _entries.isEmpty
-          ? const Center(child: Text('No watch history yet.\nPlay a movie and it will appear here.', textAlign: TextAlign.center, style: TextStyle(color: kGrey)))
+          ? Center(child: Text(Lang.t('noHistory'), textAlign: TextAlign.center, style: const TextStyle(color: kGrey)))
           : ListView.builder(
               itemCount: _entries.length,
               itemBuilder: (context, i) {
@@ -1613,7 +2062,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 return ListTile(
                   leading: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(movie.posterUrl, width: 60, height: 85, fit: BoxFit.cover, errorBuilder: (_, __, ___) => Container(width: 60, height: 85, color: kCard2))),
                   title: Text(movie.title),
-                  subtitle: Text('Remaining ${fmtTime(remaining)}', style: const TextStyle(color: Colors.red)),
+                  subtitle: Text('${Lang.t('remaining')} ${fmtTime(remaining)}', style: const TextStyle(color: Colors.red)),
                   trailing: IconButton(icon: const Icon(Icons.delete_outline, color: kGrey), onPressed: () async { await removeWatch(e.movieId); _load(); }),
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => PlayerScreen(movie: movie, startAt: e.position))),
                 );
@@ -1646,16 +2095,16 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     return DefaultTabController(
       length: 2,
       child: Scaffold(
-        appBar: AppBar(title: const Text('My download'), actions: [TextButton(onPressed: () {}, child: const Text('Edit', style: TextStyle(color: Colors.white)) )], bottom: const TabBar(tabs: [Tab(text: 'Downloading'), Tab(text: 'Downloaded')])),
+        appBar: AppBar(title: Text(Lang.t('myDownloads')), actions: [TextButton(onPressed: () {}, child: const Text('Edit', style: TextStyle(color: Colors.white)) )], bottom: TabBar(tabs: [Tab(text: Lang.t('downloading')), Tab(text: Lang.t('downloaded'))])),
         body: TabBarView(children: [
-          const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.movie, size: 64, color: kGrey), SizedBox(height: 12), Text('No Content yet', style: TextStyle(color: kGrey))])),
+          Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [const Icon(Icons.movie, size: 64, color: kGrey), const SizedBox(height: 12), Text(Lang.t('noContent'), style: const TextStyle(color: kGrey))])),
           downloadedMovies.isEmpty
-              ? const Center(child: Text('No downloaded movies yet.\nTap Download on a movie details page.', textAlign: TextAlign.center, style: TextStyle(color: kGrey)))
+              ? Center(child: Text(Lang.t('noDownloads'), textAlign: TextAlign.center, style: const TextStyle(color: kGrey)))
               : ListView.builder(itemCount: downloadedMovies.length, itemBuilder: (context, i) {
                   final m = downloadedMovies[i];
                   return ListTile(
                     leading: ClipRRect(borderRadius: BorderRadius.circular(6), child: Image.network(m.posterUrl, width: 60, height: 85, fit: BoxFit.cover)),
-                    title: Text(m.title), subtitle: const Text('Downloaded • Tap to play offline'),
+                    title: Text(m.title), subtitle: Text(Lang.t('downloadedTap')),
                     onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DetailsScreen(movie: m))),
                   );
                 }),
@@ -1670,7 +2119,7 @@ class FavoritesScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('My Favorites')),
+      appBar: AppBar(title: Text(Lang.t('myFavorites'))),
       body: FutureBuilder<List<Movie>>(
         future: MovieRepo.getAll(),
         builder: (context, snap) {
@@ -1679,7 +2128,7 @@ class FavoritesScreen extends StatelessWidget {
             future: SharedPreferences.getInstance().then((p) => p.getStringList('favorites') ?? []),
             builder: (context, favSnap) {
               final favs = snap.data!.where((m) => (favSnap.data ?? []).contains(m.id)).toList();
-              if (favs.isEmpty) return const Center(child: Text('No favorites yet.', style: TextStyle(color: kGrey)));
+              if (favs.isEmpty) return Center(child: Text(Lang.t('noFavorites'), style: const TextStyle(color: kGrey)));
               return GridView.builder(padding: const EdgeInsets.all(12), gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.62, crossAxisSpacing: 8, mainAxisSpacing: 12), itemCount: favs.length, itemBuilder: (context, i) => MovieCard(movie: favs[i], width: double.infinity));
             },
           );
@@ -1692,31 +2141,52 @@ class FavoritesScreen extends StatelessWidget {
 // ---------------- ORDER LIST: purchased plan only, no buy screen ----------------
 class OrderListScreen extends StatelessWidget {
   const OrderListScreen({super.key});
+
+  String _dateOnly(String iso) => iso.isEmpty ? '-' : iso.split('T').first;
+  String _expiryDate(String ms) {
+    final v = int.tryParse(ms) ?? 0;
+    if (v <= 0) return '-';
+    return DateTime.fromMillisecondsSinceEpoch(v).toString().split(' ').first;
+  }
+
+  Widget _row(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(children: [
+          Expanded(child: Text(label, style: const TextStyle(color: kGrey))),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+        ]),
+      );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Order list')),
-      body: FutureBuilder<String?>(
-        future: Prefs.vipPlan(),
+      appBar: AppBar(title: Text(Lang.t('orderList'))),
+      body: FutureBuilder<Map<String, String>>(
+        future: Prefs.vipOrder(),
         builder: (context, snap) {
-          if (!snap.hasData && snap.connectionState == ConnectionState.waiting) {
+          if (snap.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator(color: kRed));
           }
-          final plan = snap.data;
-          if (plan == null || plan.isEmpty) {
-            return const Center(
+          final order = snap.data ?? {};
+          final plan = order['plan'] ?? '';
+          if (plan.isEmpty) {
+            return Center(
               child: Padding(
-                padding: EdgeInsets.all(24),
+                padding: const EdgeInsets.all(24),
                 child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(Icons.receipt_long, size: 64, color: kGrey),
-                  SizedBox(height: 16),
-                  Text('Not purchased VIP plan yet', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-                  SizedBox(height: 8),
-                  Text('You have not purchased a VIP plan yet.', style: TextStyle(color: kGrey), textAlign: TextAlign.center),
+                  const Icon(Icons.receipt_long, size: 64, color: kGrey),
+                  const SizedBox(height: 16),
+                  Text(Lang.t('notPurchased'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                  const SizedBox(height: 8),
+                  Text(Lang.t('notPurchasedSub'), style: const TextStyle(color: kGrey), textAlign: TextAlign.center),
                 ]),
               ),
             );
           }
+          final amount = order['amount'] ?? '0';
+          final utr = order['utr'] ?? '';
+          final date = _dateOnly(order['date'] ?? '');
+          final expiry = _expiryDate(order['expiry'] ?? '0');
           return Padding(
             padding: const EdgeInsets.all(16),
             child: Column(children: [
@@ -1727,9 +2197,25 @@ class OrderListScreen extends StatelessWidget {
                   const Icon(Icons.workspace_premium, color: Colors.amber, size: 40),
                   const SizedBox(width: 16),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('Purchased plan: $plan', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    const Text('Status: Purchased', style: TextStyle(color: Colors.green)),
+                    Text('${Lang.t('purchasedPlan')} $plan', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    Text(Lang.t('statusPurchased'), style: const TextStyle(color: Colors.green)),
                   ])),
+                ]),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(color: kCard2, borderRadius: BorderRadius.circular(12)),
+                child: Column(children: [
+                  _row(Lang.t('orderAmount'), '\u20B9$amount.00'),
+                  const Divider(color: kGrey),
+                  _row(Lang.t('orderDate'), date),
+                  const Divider(color: kGrey),
+                  _row(Lang.t('orderExpiry'), expiry),
+                  if (utr.isNotEmpty) ...[
+                    const Divider(color: kGrey),
+                    _row(Lang.t('orderUtr'), utr),
+                  ],
                 ]),
               ),
             ]),
@@ -1747,73 +2233,193 @@ class VipScreen extends StatefulWidget {
   State<VipScreen> createState() => _VipScreenState();
 }
 class _VipScreenState extends State<VipScreen> {
-  int _selected = 2; // 6 Months default, like screenshot
+  int _selected = 2; // 6 Months default
+  // New prices (1 Nov: Dino - Rs 50/month): 1 Month Rs 50,
+  // 3 Months Rs 150, 6 Months Rs 300, 12 Months Rs 600.
+  // Struck price = double the new price.
   final _plans = [
-    ('1 Month', 110, 200), ('3 Months', 300, 600),
-    ('6 Months', 520, 1200), ('12 Months', 920, 2400),
+    ('1 Month', 50, 100, 1), ('3 Months', 150, 300, 3),
+    ('6 Months', 300, 600, 6), ('12 Months', 600, 1200, 12),
   ];
+
+  // UPI payment link for the selected plan. The QR below encodes
+  // this same link, so scanning it opens the same payment.
+  String _upiUri() {
+    final plan = _plans[_selected];
+    return 'upi://pay?pa=${Uri.encodeComponent(kUpiId)}'
+        '&pn=${Uri.encodeComponent(kUpiPayee)}'
+        '&am=${plan.$2}.00&cu=INR'
+        '&tn=${Uri.encodeComponent('Flix VIP ${plan.$1}')}';
+  }
+
+  Future<void> _payViaUpi() async {
+    final uri = Uri.parse(_upiUri());
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('noUpiApp'))));
+    }
+  }
+
+  Future<void> _confirmPayment() async {
+    final plan = _plans[_selected];
+    final utrCtrl = TextEditingController();
+    final utr = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(Lang.t('confirmTitle')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${Lang.t('payExact')}: \u20B9${plan.$2}.00'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: utrCtrl,
+              decoration: InputDecoration(hintText: Lang.t('utrHint'), border: const OutlineInputBorder()),
+            ),
+            const SizedBox(height: 8),
+            Text(Lang.t('utrHelp'), style: const TextStyle(color: kGrey, fontSize: 12)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text(Lang.t('cancel'))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(context, utrCtrl.text.trim()),
+            child: Text(Lang.t('activate')),
+          ),
+        ],
+      ),
+    );
+    if (utr == null) return;
+    await Prefs.saveVipOrder(plan: plan.$1, amount: plan.$2, months: plan.$4, utr: utr);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('vipActivated'))));
+    Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
     final plan = _plans[_selected];
     return Scaffold(
-      appBar: AppBar(title: const Text('Payment')),
-      body: Column(children: [
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
+      appBar: AppBar(title: Text(Lang.t('payment'))),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [Color(0xFFE8C88A), Color(0xFFD9A86A)]),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Center(child: Text(Lang.t('vipBenefits'), style: const TextStyle(color: Colors.brown, fontSize: 20, fontWeight: FontWeight.bold))),
+              const SizedBox(height: 16),
+              Text(Lang.t('benefit1'), style: const TextStyle(color: Colors.brown)),
+              const SizedBox(height: 8),
+              Text(Lang.t('benefit2'), style: const TextStyle(color: Colors.brown)),
+              const SizedBox(height: 8),
+              Text(Lang.t('benefit3'), style: const TextStyle(color: Colors.brown)),
+            ]),
+          ),
+          const SizedBox(height: 16),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 1.4, crossAxisSpacing: 12, mainAxisSpacing: 12),
+            itemCount: _plans.length,
+            itemBuilder: (context, i) {
+              final p = _plans[i];
+              final sel = i == _selected;
+              return GestureDetector(
+                onTap: () => setState(() => _selected = i),
+                child: Container(
+                  decoration: BoxDecoration(color: sel ? Colors.white : const Color(0xFF1E2A4A), borderRadius: BorderRadius.circular(12)),
+                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Text(p.$1, style: TextStyle(color: sel ? Colors.brown : Colors.white)),
+                    Text('\u20B9 ${p.$2}.00', style: TextStyle(color: Colors.orange.shade700, fontSize: 20, fontWeight: FontWeight.bold)),
+                    Text('\u20B9${p.$3}.00', style: TextStyle(color: sel ? Colors.grey : Colors.white54, decoration: TextDecoration.lineThrough)),
+                  ]),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(color: kCard2, borderRadius: BorderRadius.circular(16)),
             child: Column(children: [
+              Text('\u20B9 ${plan.$2}.00   ${plan.$1}', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 20)),
+              const SizedBox(height: 12),
               Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFFE8C88A), Color(0xFFD9A86A)]), borderRadius: BorderRadius.circular(16)),
-                child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Center(child: Text('VIP benefits', style: TextStyle(color: Colors.brown, fontSize: 20, fontWeight: FontWeight.bold))),
-                  SizedBox(height: 16),
-                  Text('✓  Exempt video ads on the home page, play, download and pause.', style: TextStyle(color: Colors.brown)),
-                  SizedBox(height: 8),
-                  Text('✓  Unlimited download opportunities', style: TextStyle(color: Colors.brown)),
-                  SizedBox(height: 8),
-                  Text('✓  More than 5 million HD movie resources', style: TextStyle(color: Colors.brown)),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+                child: QrImageView(
+                  data: _upiUri(),
+                  version: QrVersions.auto,
+                  size: 200,
+                  backgroundColor: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(Lang.t('scanQr'), style: const TextStyle(color: kGrey)),
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    decoration: BoxDecoration(color: kBg, borderRadius: BorderRadius.circular(10)),
+                    child: Text(kUpiId, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.copy, color: Colors.white),
+                  tooltip: Lang.t('copyUpi'),
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: kUpiId));
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('copied'))));
+                  },
+                ),
+              ]),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: Colors.green.withOpacity(0.12), borderRadius: BorderRadius.circular(12)),
+                child: Row(children: [
+                  const Icon(Icons.verified_user, color: Colors.green),
+                  const SizedBox(width: 10),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(Lang.t('paySecureTitle'), style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 2),
+                    Text(Lang.t('paySecureBody'), style: const TextStyle(color: kGrey, fontSize: 12)),
+                  ])),
                 ]),
               ),
               const SizedBox(height: 16),
-              GridView.builder(
-                shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 1.4, crossAxisSpacing: 12, mainAxisSpacing: 12),
-                itemCount: _plans.length,
-                itemBuilder: (context, i) {
-                  final p = _plans[i];
-                  final sel = i == _selected;
-                  return GestureDetector(
-                    onTap: () => setState(() => _selected = i),
-                    child: Container(
-                      decoration: BoxDecoration(color: sel ? Colors.white : const Color(0xFF1E2A4A), borderRadius: BorderRadius.circular(12)),
-                      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        Text(p.$1, style: TextStyle(color: sel ? Colors.brown : Colors.white)),
-                        Text('₹ ${p.$2}.00', style: TextStyle(color: Colors.orange.shade700, fontSize: 20, fontWeight: FontWeight.bold)),
-                        Text('₹${p.$3}.00', style: TextStyle(color: sel ? Colors.grey : Colors.white54, decoration: TextDecoration.lineThrough)),
-                      ]),
-                    ),
-                  );
-                },
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
+                  onPressed: _payViaUpi,
+                  child: Text(Lang.t('payInUpi'), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ),
               ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: _confirmPayment,
+                  child: Text(Lang.t('iHavePaid'), style: const TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text('${Lang.t('payExact')}: \u20B9${plan.$2}.00', style: const TextStyle(color: kGrey, fontSize: 12), textAlign: TextAlign.center),
             ]),
           ),
-        ),
-        Container(
-          color: Colors.white,
-          child: Row(children: [
-            Expanded(child: Padding(padding: const EdgeInsets.all(16), child: Text('₹ ${plan.$2}.00   ${plan.$1}', style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 18)))),
-            GestureDetector(
-              onTap: () async {
-                final p = await SharedPreferences.getInstance();
-                await p.setString('vip_plan', plan.$1);
-                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${plan.$1} VIP selected (demo - connect a real payment gateway for live payments)')));
-              },
-              child: Container(color: Colors.orange, padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 20), child: const Text('Next', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
-            ),
-          ]),
-        ),
-      ]),
+        ]),
+      ),
     );
   }
 }
@@ -1840,7 +2446,7 @@ class _ShareScreenState extends State<ShareScreen> {
   Widget build(BuildContext context) {
     final days = Prefs.adFreeDays(_invited);
     return Scaffold(
-      appBar: AppBar(title: const Text('Promotion'), actions: [TextButton(onPressed: () {}, child: const Text('Promotion record', style: TextStyle(color: Colors.white)))]),
+      appBar: AppBar(title: Text(Lang.t('promotion')), actions: [TextButton(onPressed: () {}, child: Text(Lang.t('promotionRecord'), style: const TextStyle(color: Colors.white)))]),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(children: [
@@ -1848,8 +2454,8 @@ class _ShareScreenState extends State<ShareScreen> {
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(color: kCard2, borderRadius: BorderRadius.circular(16)),
             child: Column(children: [
-              Text('Promoted $_invited person', style: const TextStyle(fontSize: 18)),
-              Text('You have $days days ad-free', style: const TextStyle(color: kGrey)),
+              Text(Lang.tr('promoted', '{n}', '$_invited'), style: const TextStyle(fontSize: 18)),
+              Text(Lang.tr('daysAdFree', '{n}', '$days'), style: const TextStyle(color: kGrey)),
               const SizedBox(height: 16),
               Container(
                 padding: const EdgeInsets.all(16),
@@ -1865,7 +2471,7 @@ class _ShareScreenState extends State<ShareScreen> {
                     dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: Colors.black),
                   ),
                   const SizedBox(height: 8),
-                  Text('My invitation code: ${_username.toUpperCase()}', style: const TextStyle(color: Colors.grey)),
+                  Text('${Lang.t('myCode')} ${_username.toUpperCase()}', style: const TextStyle(color: Colors.grey)),
                 ]),
               ),
               const SizedBox(height: 16),
@@ -1891,7 +2497,7 @@ class _ShareScreenState extends State<ShareScreen> {
                         'Join Flix now and start watching!';
                     await SharePlus.instance.share(ShareParams(text: message));
                   },
-                  child: const Text('Share now', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                  child: Text(Lang.t('shareNow'), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
                 ),
               ),
               const Padding(
