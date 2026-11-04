@@ -373,10 +373,6 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
   bool get _isSeries =>
       widget.movie.type == 'TV Show' || widget.movie.type == 'Web Series';
 
-  // The Details screen already lists 3 placeholder episodes even when
-  // movie.episodes is empty, so TV shows get 3 navigable episodes here
-  // too (season 1). If real episode URLs were set by Admin, use that
-  // count instead.
   int get _episodeCount =>
       widget.movie.episodes.isNotEmpty ? widget.movie.episodes.length : 3;
 
@@ -439,38 +435,27 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
     super.dispose();
   }
 
-  Future<bool> _onWillPop() async {
-    final c = _controller;
-    if (c != null) {
-      final canGoBack = await c.canGoBack();
-      if (canGoBack) {
-        await c.goBack();
-        return false;
-      }
-    }
-    return true;
-  }
-
+  // CHANGE YAHAN HAI: WillPopScope hata kar PopScope laga diya gaya hai
   @override
-Widget build(BuildContext context) {
-  return PopScope(
-    canPop: false,
-    onPopInvokedWithResult: (didPop, result) async {
-      if (didPop) return;
-      final c = _controller;
-      if (c != null) {
-        final canGoBack = await c.canGoBack();
-        if (canGoBack) {
-          await c.goBack();
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final c = _controller;
+        if (c != null) {
+          final canGoBack = await c.canGoBack();
+          if (canGoBack) {
+            await c.goBack();
+          } else {
+            if (context.mounted) Navigator.pop(context);
+          }
         } else {
           if (context.mounted) Navigator.pop(context);
         }
-      } else {
-        if (context.mounted) Navigator.pop(context);
-      }
-    },
-    child: Scaffold(
-      backgroundColor: Colors.black,
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
         body: Stack(children: [
           if (_error != null)
             Center(
@@ -492,7 +477,7 @@ Widget build(BuildContext context) {
                       _loadCurrent();
                     },
                     child: const Text('Retry'),
-                 ),
+                  ),
                 ]),
               ),
             )
@@ -500,7 +485,6 @@ Widget build(BuildContext context) {
             WebViewWidget(controller: _controller!),
           if (_loading && _error == null)
             const Center(child: CircularProgressIndicator(color: kRed)),
-          // Top bar: back + title
           Positioned(
             top: 0, left: 0, right: 0,
             child: SafeArea(
@@ -533,7 +517,6 @@ Widget build(BuildContext context) {
               ),
             ),
           ),
-          // Episode navigation for TV shows (only when player loaded)
           if (_isSeries && _error == null && !_loading)
             Positioned(
               bottom: 12, left: 12, right: 12,
