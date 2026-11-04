@@ -452,11 +452,25 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: _onWillPop,
-      child: Scaffold(
-        backgroundColor: Colors.black,
+Widget build(BuildContext context) {
+  return PopScope(
+    canPop: false,
+    onPopInvokedWithResult: (didPop, result) async {
+      if (didPop) return;
+      final c = _controller;
+      if (c != null) {
+        final canGoBack = await c.canGoBack();
+        if (canGoBack) {
+          await c.goBack();
+        } else {
+          if (context.mounted) Navigator.pop(context);
+        }
+      } else {
+        if (context.mounted) Navigator.pop(context);
+      }
+    },
+    child: Scaffold(
+      backgroundColor: Colors.black,
         body: Stack(children: [
           if (_error != null)
             Center(
