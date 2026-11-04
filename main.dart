@@ -21,8 +21,9 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
-import 'package:webview_flutter/webview_flutter.dart'; // NEW: NexStream embed player
+import 'package:webview_flutter/webview_flutter.dart';
 
+// NEW: NexStream embed player
 const Color kBg = Color(0xFF0B1220);
 const Color kCard = Color(0xFF1A2436);
 const Color kCard2 = Color(0xFF232F45);
