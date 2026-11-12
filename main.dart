@@ -1648,17 +1648,21 @@ class DetailsScreen extends StatefulWidget {
   @override
   State<DetailsScreen> createState() => _DetailsScreenState();
 }
+
 class _DetailsScreenState extends State<DetailsScreen> {
   bool _fav = false;
+  
   @override
   void initState() {
     super.initState();
     _loadFav();
   }
+  
   Future<void> _loadFav() async {
     final p = await SharedPreferences.getInstance();
     setState(() => _fav = (p.getStringList('favorites') ?? []).contains(widget.movie.id));
   }
+  
   Future<void> _toggleFav() async {
     final p = await SharedPreferences.getInstance();
     final list = p.getStringList('favorites') ?? [];
@@ -1666,6 +1670,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     await p.setStringList('favorites', list);
     setState(() => _fav = !_fav);
   }
+  
   Future<void> _download() async {
     if (widget.movie.videoUrl.isEmpty && widget.movie.episodes.isEmpty) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('noVideo'))));
@@ -1763,6 +1768,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     );
   }
 }
+
 
 // ---------------- PLAYER (unchanged) ----------------
 class PlayerScreen extends StatefulWidget {
