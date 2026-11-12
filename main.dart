@@ -3,9 +3,6 @@
 // If Firebase is NOT connected yet, the app runs with admin-added
 // movies saved locally (no sample / placeholder movies any more).
 // Connect Firebase later (see README).
-// IMPORTANT: Only add videos you own or have a licence for. The videoUrl
-// field must be YOUR hosted link (Firebase Storage / your server), not a
-// link copied from another streaming site.
 
 import 'dart:async';
 import 'dart:convert';
