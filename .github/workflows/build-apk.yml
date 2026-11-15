@@ -39,12 +39,14 @@ jobs:
         run: |
           cd temp_flix
           
-          # --- FIX: Flutter 3.50.0 ke liye AGP aur Gradle versions update karein ---
-          # AGP 8.5.2 set karein (minimum required version)
-          sed -i 's/id("com.android.application") version "8.5.0"/id("com.android.application") version "8.5.2"/' android/settings.gradle.kts
+          # --- 100% FIX: Flutter 3.50.0 ke liye sahi versions set karein ---
+          # AGP 9.1.1, Gradle 9.3.1, Kotlin 2.4.10
+          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-9.3.1-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's/id("com.android.application") version "[0-9.]*"/id("com.android.application") version "9.1.1"/' android/settings.gradle.kts
+          sed -i 's/id("org.jetbrains.kotlin.android") version "[0-9.]*"/id("org.jetbrains.kotlin.android") version "2.4.10"/' android/settings.gradle.kts
           
-          # Gradle ko 8.7 par update karein
-          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
+          # AGP 9 ke liye built-in Kotlin ko enable karein
+          echo "android.builtInKotlin=true" >> android/gradle.properties
           # ---------------------------------------------------------------------
 
           # Firebase needs minSdk 23
