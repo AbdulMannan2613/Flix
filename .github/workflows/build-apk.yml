@@ -39,16 +39,15 @@ jobs:
         run: |
           cd temp_flix
           
-          # --- NAYA FIX: Flutter 3.29+ ke liye .kts files update karein ---
-          echo "Updating Gradle, AGP, and Kotlin versions in .kts files..."
-          # Gradle version update
+          # --- FIX: Flutter 3.50.0 ke liye AGP aur Gradle versions update karein ---
+          # AGP 8.5.2 set karein (minimum required version)
+          sed -i 's/id("com.android.application") version "8.5.0"/id("com.android.application") version "8.5.2"/' android/settings.gradle.kts
+          
+          # Gradle ko 8.7 par update karein
           sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
-          # AGP aur Kotlin version update settings.gradle.kts mein
-          sed -i 's/id("com.android.application") version "[0-9.]*"/id("com.android.application") version "8.5.0"/' android/settings.gradle.kts
-          sed -i 's/id("org.jetbrains.kotlin.android") version "[0-9.]*"/id("org.jetbrains.kotlin.android") version "2.0.10"/' android/settings.gradle.kts
-          # ---------------------------------------------------------------
+          # ---------------------------------------------------------------------
 
-          # Firebase needs minSdk 23 (Updated to target .kts file)
+          # Firebase needs minSdk 23
           sed -i 's/minSdk = 21/minSdk = 23/; s/minSdkVersion 21/minSdkVersion 23/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
           
           # Inject build tag
