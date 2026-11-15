@@ -38,29 +38,33 @@ jobs:
       - name: Build APK
         run: |
           cd temp_flix
-          
-          # --- FINAL PERMANENT FIX: Compatibility versions for Flutter 3.35.x ---
-          # Gradle 8.10, AGP 8.7.2, Kotlin 2.0.21
-          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
+
+          # --- FIX: overwrite gradle-wrapper.properties directly ---
+          # This is more reliable than sed and avoids any corruption.
+          cat > android/gradle/wrapper/gradle-wrapper.properties <<'PROPS'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.10-all.zip
+          PROPS
+
+          # --- FIX: Flutter 3.35.x ke liye AGP aur Kotlin versions ---
           sed -i 's/id("com.android.application") version "[0-9.]*"/id("com.android.application") version "8.7.2"/' android/settings.gradle.kts
           sed -i 's/id("org.jetbrains.kotlin.android") version "[0-9.]*"/id("org.jetbrains.kotlin.android") version "2.0.21"/' android/settings.gradle.kts
-          
-          # webview_flutter needs compileSdk 35 and minSdk 24+
+
+          # --- FIX: webview_flutter ke liye SDK versions ---
           sed -i 's/compileSdk = [0-9]*/compileSdk = 35/; s/compileSdkVersion [0-9]*/compileSdkVersion 35/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
           sed -i 's/minSdk = 21/minSdk = 24/; s/minSdkVersion 21/minSdkVersion 24/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
-          
-          # AGP 9+ ke built-in Kotlin ko disable karein (purane plugin ke liye zaroori)
-          echo "android.builtInKotlin=false" >> android/gradle.properties
-          # --------------------------------------------------------------------------
 
           # Inject build tag
           sed -i "s/const String kBuildTag = 'dev';/const String kBuildTag = 'build-${{ github.run_number }}';/" lib/main.dart || true
-          
+
           flutter pub get
-          
+
           # Generate launcher icon
           dart run flutter_launcher_icons || echo "Icon generation skipped, continuing with default icon"
-          
+
           # Icon processing (kept as is)
           pip install pillow -q || true
           python3 - << 'PY'
