@@ -39,18 +39,26 @@ jobs:
         run: |
           cd temp_flix
           
-          # Firebase needs minSdk 23; fresh Flutter projects may use 21
-          sed -i 's/minSdk = 21/minSdk = 23/; s/minSdkVersion 21/minSdkVersion 23/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
+          # --- PERMANENT FIX: Compatibility versions for Flutter 3.24.x ---
+          # Gradle 8.7, AGP 8.5.0, Kotlin 2.0.10, Java 17
+          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's/id("com.android.application") version "[0-9.]*"/id("com.android.application") version "8.5.0"/' android/settings.gradle.kts
+          sed -i 's/id("org.jetbrains.kotlin.android") version "[0-9.]*"/id("org.jetbrains.kotlin.android") version "2.0.10"/' android/settings.gradle.kts
           
-          # Inject this build's tag so the app can tell old from new.
+          # webview_flutter needs compileSdk 34 and minSdk 23+
+          sed -i 's/compileSdk = [0-9]*/compileSdk = 34/; s/compileSdkVersion [0-9]*/compileSdkVersion 34/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
+          sed -i 's/minSdk = 21/minSdk = 23/; s/minSdkVersion 21/minSdkVersion 23/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
+          # ------------------------------------------------------------------
+
+          # Inject build tag
           sed -i "s/const String kBuildTag = 'dev';/const String kBuildTag = 'build-${{ github.run_number }}';/" lib/main.dart || true
           
           flutter pub get
           
-          # Generate the launcher icon
+          # Generate launcher icon
           dart run flutter_launcher_icons || echo "Icon generation skipped, continuing with default icon"
           
-          # Icon processing
+          # Icon processing (kept as is)
           pip install pillow -q || true
           python3 - << 'PY'
           import os, re
