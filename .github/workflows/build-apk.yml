@@ -39,17 +39,18 @@ jobs:
         run: |
           cd temp_flix
           
-          # --- STABLE FIX: AGP 8.5.2 aur Gradle 8.7 set karein ---
-          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
-          sed -i 's/id("com.android.application") version "[0-9.]*"/id("com.android.application") version "8.5.2"/' android/settings.gradle.kts
-          # -----------------------------------------------------
-
+          # Firebase needs minSdk 23; fresh Flutter projects may use 21
           sed -i 's/minSdk = 21/minSdk = 23/; s/minSdkVersion 21/minSdkVersion 23/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
+          
+          # Inject this build's tag so the app can tell old from new.
           sed -i "s/const String kBuildTag = 'dev';/const String kBuildTag = 'build-${{ github.run_number }}';/" lib/main.dart || true
           
           flutter pub get
+          
+          # Generate the launcher icon
           dart run flutter_launcher_icons || echo "Icon generation skipped, continuing with default icon"
           
+          # Icon processing
           pip install pillow -q || true
           python3 - << 'PY'
           import os, re
