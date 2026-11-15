@@ -1,8 +1,5 @@
 // FLIX - Stream Unlimited Movies & TV Shows
-// Flutter + Firebase (Firestore) + local fallback
-// If Firebase is NOT connected yet, the app runs with admin-added
-// movies saved locally (no sample / placeholder movies any more).
-// Connect Firebase later (see README).
+// Flutter + Firebase (Firestore) + local fallback + NexStream (TMDB playback)
 
 import 'dart:async';
 import 'dart:convert';
@@ -20,7 +17,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-// NEW: NexStream embed player
 const Color kBg = Color(0xFF0B1220);
 const Color kCard = Color(0xFF1A2436);
 const Color kCard2 = Color(0xFF232F45);
@@ -310,22 +306,14 @@ class Tmdb {
   }
 }
 
-// ---------------- NEXSTREAM (NEW) ----------------
-// NexStream embed API for TMDB movies and TV shows. This class only
-// builds the embed URL; playback happens in NexStreamPlayerScreen
-// (WebView based) because NexStream serves an HTML embed page, not
-// a direct .mp4 file. Existing non-TMDB movies (Admin-added with a
-// real videoUrl) keep using the original PlayerScreen, unchanged.
+// ---------------- NEXSTREAM ----------------
 class NexStreamHelper {
   static const String _apiKey = 'nx_0a870df2c80f0d4e0d59a723987e0be7';
   static const String _baseUrl = 'https://api.codespecters.com';
 
-  /// A movie is played through NexStream when it is a TMDB title
-  /// (id starts with tmdb_) and has no direct videoUrl of its own.
   static bool canPlay(Movie movie) =>
       movie.id.startsWith('tmdb_') && movie.videoUrl.isEmpty;
 
-  /// Extract the numeric TMDB ID from the app's internal id.
   static String? _tmdbId(Movie movie) {
     final raw = movie.id;
     if (raw.startsWith('tmdb_tv_')) return raw.replaceFirst('tmdb_tv_', '');
@@ -333,8 +321,6 @@ class NexStreamHelper {
     return null;
   }
 
-  /// Build the NexStream embed URL. For TV shows, season defaults to 1
-  /// and episode = episodeIndex + 1 (episodeIndex is 0-based).
   static String buildEmbedUrl(Movie movie,
       {int episodeIndex = 0, int season = 1}) {
     final id = _tmdbId(movie);
@@ -347,11 +333,6 @@ class NexStreamHelper {
   }
 }
 
-// ---------------- NEXSTREAM PLAYER (NEW) ----------------
-// Fullscreen WebView player. NexStream serves an HTML player page,
-// so video_player cannot handle it - a WebView is required. The
-// existing PlayerScreen is untouched and still handles any
-// Admin-added video with a real videoUrl.
 class NexStreamPlayerScreen extends StatefulWidget {
   final Movie movie;
   final int episodeIndex;
@@ -433,7 +414,6 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
     super.dispose();
   }
 
-  // CHANGE YAHAN HAI: WillPopScope hata kar PopScope laga diya gaya hai
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -763,7 +743,6 @@ class Lang {
 
 class FlixApp extends StatelessWidget {
   const FlixApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<String>(
@@ -782,7 +761,6 @@ class FlixApp extends StatelessWidget {
   }
 }
 
-// ---------------- MODEL ----------------
 class Movie {
   final String id, title, description, category, language, posterUrl, videoUrl, type;
   final String backdropUrl;
@@ -830,7 +808,6 @@ class Movie {
 
 List<Movie> sampleMovies() => [];
 
-// ---------------- REPOSITORY ----------------
 class MovieRepo {
   static bool _isSampleId(String id) => RegExp(r'^s[0-9]$').hasMatch(id);
 
@@ -1131,7 +1108,7 @@ String fmtTime(int seconds) {
 class FitRectangleImage extends StatelessWidget {
   final String url;
   const FitRectangleImage({super.key, required this.url});
-    @override
+  @override
   Widget build(BuildContext context) {
     if (url.isEmpty) return Container(color: kCard2);
     return Container(
@@ -1407,7 +1384,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class CategoriesScreen extends StatefulWidget {
   const CategoriesScreen({super.key});
-    @override
+  @override
   State<CategoriesScreen> createState() => _CategoriesScreenState();
 }
 class _CategoriesScreenState extends State<CategoriesScreen> {
@@ -1638,31 +1615,23 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 }
 
-// ---------------- DETAILS ----------------
-// CHANGED: Watch Now + episode tap now route TMDB items to
-// NexStreamPlayerScreen (WebView), while Admin-added movies with a
-// real videoUrl still use the original PlayerScreen unchanged.
 class DetailsScreen extends StatefulWidget {
   final Movie movie;
   const DetailsScreen({super.key, required this.movie});
   @override
   State<DetailsScreen> createState() => _DetailsScreenState();
 }
-
 class _DetailsScreenState extends State<DetailsScreen> {
   bool _fav = false;
-  
   @override
   void initState() {
     super.initState();
     _loadFav();
   }
-  
   Future<void> _loadFav() async {
     final p = await SharedPreferences.getInstance();
     setState(() => _fav = (p.getStringList('favorites') ?? []).contains(widget.movie.id));
   }
-  
   Future<void> _toggleFav() async {
     final p = await SharedPreferences.getInstance();
     final list = p.getStringList('favorites') ?? [];
@@ -1670,7 +1639,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
     await p.setStringList('favorites', list);
     setState(() => _fav = !_fav);
   }
-  
   Future<void> _download() async {
     if (widget.movie.videoUrl.isEmpty && widget.movie.episodes.isEmpty) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('noVideo'))));
@@ -1692,13 +1660,11 @@ class _DetailsScreenState extends State<DetailsScreen> {
 
   void _playNow({int episodeIndex = 0}) async {
     final m = widget.movie;
-    // TMDB items -> NexStream embed player (WebView).
     if (NexStreamHelper.canPlay(m)) {
       Navigator.push(context, MaterialPageRoute(
           builder: (_) => NexStreamPlayerScreen(movie: m, episodeIndex: episodeIndex)));
       return;
     }
-    // Legacy path: admin-added movie with a real videoUrl.
     if (m.videoUrl.isEmpty && m.episodes.isEmpty) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('tmdbOnly'))));
       return;
@@ -1769,8 +1735,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 }
 
-
-// ---------------- PLAYER (unchanged) ----------------
 class PlayerScreen extends StatefulWidget {
   final Movie movie; final int startAt; final int episodeIndex;
   const PlayerScreen({super.key, required this.movie, this.startAt = 0, this.episodeIndex = 0});
@@ -2049,8 +2013,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   subtitle: Text('${Lang.t('remaining')} ${fmtTime(remaining)}', style: const TextStyle(color: Colors.red)),
                   trailing: IconButton(icon: const Icon(Icons.delete_outline, color: kGrey), onPressed: () async { await removeWatch(e.movieId); _load(); }),
                   onTap: () {
-                    // Route through DetailsScreen so NexStream/TMDB
-                    // items get the correct player automatically.
                     Navigator.push(context, MaterialPageRoute(builder: (_) => DetailsScreen(movie: movie)));
                   },
                 );
