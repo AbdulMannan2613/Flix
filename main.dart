@@ -29,6 +29,23 @@ const String kRepo = 'AbdulMannan2613/Flix';
 const String kUpiId = 'mannanbhaii@fam';
 const String kUpiPayee = 'Flix';
 
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp(
+      options: const FirebaseOptions(
+        apiKey: 'AIzaSyC12Na1MoINhZrpJjDVZqfmfyYkz96y65c',
+        appId: '1:468956683510:android:501395842c28668757e0d7',
+        messagingSenderId: '468956683510',
+        projectId: 'flix-9a157',
+        storageBucket: 'flix-9a157.firebasestorage.app',
+      ),
+    );
+  } catch (_) {}
+  await Lang.load();
+  runApp(const FlixApp());
+}
+
 class UpdateChecker {
   static Future<({String tag, String apkUrl})?> fetchLatest() async {
     try {
