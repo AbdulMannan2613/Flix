@@ -40,20 +40,49 @@ jobs:
         run: |
           cd temp_flix
 
-          # --- PERMANENT FIX: Flutter 3.50.0 ke liye minimum versions ---
-          # Gradle 9.3.1, AGP 9.1.1, Kotlin 2.4.10
+          # --- PERMANENT FIX: Flutter 3.50.0 ke liye Gradle, AGP aur Kotlin versions ---
           sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-9.3.1-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
           sed -i 's/id("com.android.application") version "[0-9.]*"/id("com.android.application") version "9.1.1"/' android/settings.gradle.kts
           sed -i 's/id("org.jetbrains.kotlin.android") version "[0-9.]*"/id("org.jetbrains.kotlin.android") version "2.4.10"/' android/settings.gradle.kts
-          # -----------------------------------------------------------------
 
-          # Firebase aur webview ke liye SDK versions
-          sed -i 's/compileSdk = [0-9]*/compileSdk = 35/; s/compileSdkVersion [0-9]*/compileSdkVersion 35/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
-          sed -i 's/minSdk = 21/minSdk = 24/; s/minSdkVersion 21/minSdkVersion 24/' android/app/build.gradle.kts android/app/build.gradle 2>/dev/null || true
+          # --- FIX: build.gradle.kts ko Python se update karein taaki koi line corrupt na ho ---
+          python3 - << 'PY'
+          import re
+          
+          # 1. app/build.gradle.kts ko sahi karein
+          path = 'android/app/build.gradle.kts'
+          with open(path, 'r') as f:
+              content = f.read()
+          
+          # compileSdk ko 35 se replace karein (chahe wo kuch bhi ho)
+          content = re.sub(r'compileSdk\s*=\s*[^\n]+', 'compileSdk = 35', content)
+          # minSdk ko 24 se replace karein (chahe wo kuch bhi ho)
+          content = re.sub(r'minSdk\s*=\s*[^\n]+', 'minSdk = 24', content)
+          
+          with open(path, 'w') as f:
+              f.write(content)
+          
+          # 2. settings.gradle.kts mein plugin versions sahi karein
+          path2 = 'android/settings.gradle.kts'
+          with open(path2, 'r') as f:
+              content2 = f.read()
+          
+          content2 = re.sub(r'id\("com.android.application"\)\s+version\s+"[^"]+"', 'id("com.android.application") version "9.1.1"', content2)
+          content2 = re.sub(r'id\("org.jetbrains.kotlin.android"\)\s+version\s+"[^"]+"', 'id("org.jetbrains.kotlin.android") version "2.4.10"', content2)
+          
+          with open(path2, 'w') as f:
+              f.write(content2)
+          
+          print("Build files updated successfully with Python")
+          PY
 
+          # Inject build tag
           sed -i "s/const String kBuildTag = 'dev';/const String kBuildTag = 'build-${{ github.run_number }}';/" lib/main.dart || true
 
           flutter pub get
+
+          # Generate launcher icon
+          dart run flutter_launcher_icons || echo "Icon generation skipped, continuing with default icon"
 
           # Icon processing (kept as is)
           pip install pillow -q || true
