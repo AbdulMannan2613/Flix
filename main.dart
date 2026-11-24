@@ -323,77 +323,8 @@ class Tmdb {
   }
 }
 
-// ---------------- NEXSTREAM ----------------
-class NexStreamHelper {
-  static const String _apiKey = 'nx_0a870df2c80f0d4e0d59a723987e0be7';
-  static const String _baseUrl = 'https://api.codespecters.com';
-
-  static bool canPlay(Movie movie) =>
-      movie.id.startsWith('tmdb_') && movie.videoUrl.isEmpty;
-
-  static String? _tmdbId(Movie movie) {
-    final raw = movie.id;
-    if (raw.startsWith('tmdb_tv_')) return raw.replaceFirst('tmdb_tv_', '');
-    if (raw.startsWith('tmdb_')) return raw.replaceFirst('tmdb_', '');
-    return null;
-  }
-
-  static String buildEmbedUrl(Movie movie,
-      {int episodeIndex = 0, int season = 1}) {
-    final id = _tmdbId(movie);
-    if (id == null) return '';
-    if (movie.type == 'TV Show' || movie.type == 'Web Series') {
-      final ep = episodeIndex + 1;
-      return '$_baseUrl/embed/tv/$id/$season/$ep?apikey=$_apiKey';
-    }
-    return '$_baseUrl/embed/movie/$id?apikey=$_apiKey';
-  }
-}
-
-class NexStreamPlayerScreen extends StatefulWidget {
-  final Movie movie;
-  final int episodeIndex;
-  const NexStreamPlayerScreen(
-      {super.key, required this.movie, this.episodeIndex = 0});
-
-  @override
-  State<NexStreamPlayerScreen> createState() => _NexStreamPlayerScreenState();
-}
-
-class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
-  WebViewController? _controller;
-  bool _loading = true;
-  String? _error;
-  late int _episodeIndex;
-
-  bool get _isSeries =>
-      widget.movie.type == 'TV Show' || widget.movie.type == 'Web Series';
-
-  int get _episodeCount =>
-      widget.movie.episodes.isNotEmpty ? widget.movie.episodes.length : 3;
-
-  @override
-  void initState() {
-    super.initState();
-    _episodeIndex = widget.episodeIndex.clamp(0, _episodeCount - 1);
-    SystemChrome.setPreferredOrientations(
-        [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    _loadCurrent();
-  }
-
-  void _loadCurrent() {
-    final url = NexStreamHelper.buildEmbedUrl(widget.movie,
-        episodeIndex: _episodeIndex);
-    if (url.isEmpty) {
-      setState(() {
-        _loading = false;
-        _error = 'NexStream link not available for this title.';
-
-
 // ---------------- MULTI-PROVIDER HELPER ----------------
 class NexStreamHelper {
-  // 'VidSrc (Main)', '2Embed', 'VidLink'
   static const List<String> providerNames = ['VidSrc', '2Embed', 'VidLink'];
 
   static bool canPlay(Movie movie) =>
@@ -413,7 +344,7 @@ class NexStreamHelper {
     final isTv = movie.type == 'TV Show' || movie.type == 'Web Series';
 
     switch (providerIndex) {
-      case 0: // VidSrc (Sabse reliable)
+      case 0: // VidSrc
         return isTv ? 'https://vidsrc.xyz/embed/tv?tmdb=$id&season=$season&episode=$ep' : 'https://vidsrc.xyz/embed/movie?tmdb=$id';
       case 1: // 2Embed
         return isTv ? 'https://www.2embed.cc/embedtv/$id&s=$season&e=$ep' : 'https://www.2embed.cc/embed/$id';
@@ -1587,10 +1518,12 @@ class _DetailsScreenState extends State<DetailsScreen> {
               ),
               const SizedBox(height: 10),
               Row(children: [
-                Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? Lang.t('saved') : Lang.t('favorite')))),
-                const SizedBox(width: 10),
-                Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: Text(Lang.t('download')))),
-              ]),
+  Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? Lang.t('saved') : Lang.t('favorite')))),
+  const SizedBox(width: 10),
+  // SIRF ADMIN MOVIES KE LIYE DOWNLOAD DIKHAYEIN
+  if (!NexStreamHelper.canPlay(m))
+    Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: Text(Lang.t('download')))),
+]),
 
 // ---------------- MULTI-PROVIDER PLAYER ----------------
 class NexStreamPlayerScreen extends StatefulWidget {
