@@ -1582,6 +1582,7 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
   late int _episodeIndex;
   int _providerIndex = 0; 
   Timer? _fallbackTimer;
+  Timer? _progressTimer; // History save karne ke liye
 
   bool get _isSeries =>
       widget.movie.type == 'TV Show' || widget.movie.type == 'Web Series';
@@ -1599,49 +1600,74 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
     _loadCurrent();
   }
 
-  void _loadCurrent() {
+  void _loadCurrent({int startAt = 0}) {
     _fallbackTimer?.cancel();
+    _progressTimer?.cancel();
+
     final url = NexStreamHelper.buildEmbedUrl(
       widget.movie, 
       providerIndex: _providerIndex, 
-      episodeIndex: _episodeIndex
+      episodeIndex: _episodeIndex,
+      startSeconds: startAt
     );
     
     if (url.isEmpty) {
-      setState(() {
-        _loading = false;
-        _error = 'Stream link not available.';
-      });
+      setState(() { _loading = false; _error = 'Stream link not available.'; });
       return;
     }
     
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.black)
+      ..setMediaPlaybackRequiresUserGesture(false) // Autoplay
       ..setNavigationDelegate(NavigationDelegate(
         onPageStarted: (_) {
           if (mounted) setState(() { _loading = true; _error = null; });
         },
         onPageFinished: (_) {
           if (mounted) {
+            // Ad Blocker inject karein
             _controller?.runJavaScript("window.open = function(){ console.log('Ad blocked'); };");
             setState(() => _loading = false);
+            _startProgressTracker(); // Video time track karna shuru karein
           }
         },
         onWebResourceError: (e) {
-          _tryNextProvider();
+          // Agar net nahi hai ya server down hai, toh error handle karein
+          if (mounted) setState(() { _loading = false; _error = 'Server connect nahi ho paya. Internet ya server check karein.'; });
+          _tryNextProvider(silent: true); // Background mein next server try kare
         },
       ))
       ..loadRequest(Uri.parse(url));
 
+    // Agar 12 second mein video load nahi hui, toh next server
     _fallbackTimer = Timer(const Duration(seconds: 12), () {
-      if (mounted && _loading) {
+      if (mounted && _loading && _error == null) {
         _tryNextProvider();
       }
     });
   }
 
-  void _tryNextProvider() {
+  // History save karne ke liye background timer
+  void _startProgressTracker() {
+    _progressTimer?.cancel();
+    _progressTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
+      if (_controller != null) {
+        try {
+          final timeStr = await _controller!.runJavaScriptReturningResult(
+            "document.querySelector('video') ? document.querySelector('video').currentTime : 0"
+          );
+          final time = double.tryParse(timeStr.toString()) ?? 0;
+          if (time > 5) {
+            // History mein save karein (duration dummy 7200 seconds rakh rahe hain)
+            saveWatchPosition(widget.movie.id, time.toInt(), 7200);
+          }
+        } catch (_) {}
+      }
+    });
+  }
+
+  void _tryNextProvider({bool silent = false}) {
     if (_providerIndex < NexStreamHelper.providerNames.length - 1) {
       setState(() {
         _providerIndex++;
@@ -1650,29 +1676,20 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
       });
       _loadCurrent();
     } else {
-      if (mounted) {
+      // Agar saare server fail ho gaye
+      if (mounted && !silent) {
         setState(() {
           _loading = false;
-          _error = 'All servers failed to load this video. Please try again later.';
+          _error = 'All servers failed. Please check your internet or try again.';
         });
       }
     }
   }
 
-  void _loadEpisode(int index) {
-    if (index < 0 || index >= _episodeCount) return;
-    setState(() {
-      _episodeIndex = index;
-      _loading = true;
-      _error = null;
-      _providerIndex = 0;
-    });
-    _loadCurrent();
-  }
-
   @override
   void dispose() {
     _fallbackTimer?.cancel();
+    _progressTimer?.cancel();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
@@ -1703,20 +1720,43 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
             Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.error_outline, color: Colors.white70, size: 48),
-                  const SizedBox(height: 12),
-                  Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white),
-                    onPressed: () {
-                      setState(() { _error = null; _loading = true; _providerIndex = 0; });
-                      _loadCurrent();
-                    },
-                    child: const Text('Retry All Servers'),
-                  ),
-                ]),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min, 
+                  children: [
+                    const Icon(Icons.wifi_off, color: Colors.white70, size: 64),
+                    const SizedBox(height: 16),
+                    Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 16)),
+                    const SizedBox(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.white24, foregroundColor: Colors.white),
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Resume'),
+                          onPressed: () {
+                            setState(() { _error = null; _loading = true; });
+                            _loadCurrent();
+                          },
+                        ),
+                        const SizedBox(width: 16),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white),
+                          icon: const Icon(Icons.swap_horiz),
+                          label: const Text('Switch Server'),
+                          onPressed: () {
+                            setState(() {
+                              _providerIndex = (_providerIndex + 1) % NexStreamHelper.providerNames.length;
+                              _error = null; 
+                              _loading = true;
+                            });
+                            _loadCurrent();
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             )
           else if (_controller != null)
@@ -1734,6 +1774,7 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
               ),
             ),
             
+          // Top Bar
           Positioned(
             top: 0, left: 0, right: 0,
             child: SafeArea(
@@ -1741,9 +1782,7 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.black87, Colors.transparent],
+                    begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black87, Colors.transparent],
                   ),
                 ),
                 child: Row(children: [
@@ -1753,21 +1792,47 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
                   ),
                   Expanded(
                     child: Text(
-                      _isSeries
-                          ? '${widget.movie.title} • Ep ${_episodeIndex + 1}'
-                          : widget.movie.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      _isSeries ? '${widget.movie.title} • Ep ${_episodeIndex + 1}' : widget.movie.title,
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    margin: const EdgeInsets.only(right: 8),
-                    decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(20)),
-                    child: Text(
-                      NexStreamHelper.providerNames[_providerIndex],
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                  
+                  // Server Dropdown (Ab "Server 1", "Server 2" dikhega)
+                  PopupMenuButton<int>(
+                    tooltip: 'Select Server',
+                    onSelected: (index) {
+                      setState(() { _providerIndex = index; _loading = true; _error = null; });
+                      _loadCurrent();
+                    },
+                    itemBuilder: (_) => List.generate(
+                      NexStreamHelper.providerNames.length,
+                      (i) => PopupMenuItem(
+                        value: i,
+                        child: Text(
+                          NexStreamHelper.providerNames[i],
+                          style: TextStyle(
+                            color: _providerIndex == i ? kRed : Colors.black,
+                            fontWeight: _providerIndex == i ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                      ),
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      margin: const EdgeInsets.only(right: 8),
+                      decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(20)),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            NexStreamHelper.providerNames[_providerIndex],
+                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.arrow_drop_down, color: Colors.white, size: 16),
+                        ],
+                      ),
                     ),
                   )
                 ]),
@@ -1775,6 +1840,7 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
             ),
           ),
           
+          // Episode Navigation for TV shows
           if (_isSeries && _error == null && !_loading)
             Positioned(
               bottom: 12, left: 12, right: 12,
@@ -1782,15 +1848,12 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
                 child: Center(
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(30),
-                    ),
+                    decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(30)),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         TextButton.icon(
-                          onPressed: _episodeIndex > 0 ? () => _loadEpisode(_episodeIndex - 1) : null,
+                          onPressed: _episodeIndex > 0 ? () { setState(() { _episodeIndex--; _loading = true; }); _loadCurrent(); } : null,
                           icon: const Icon(Icons.skip_previous, color: Colors.white, size: 20),
                           label: const Text('Prev', style: TextStyle(color: Colors.white)),
                         ),
@@ -1798,7 +1861,7 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
                         Text('${_episodeIndex + 1} / $_episodeCount', style: const TextStyle(color: Colors.white)),
                         const SizedBox(width: 8),
                         TextButton.icon(
-                          onPressed: _episodeIndex + 1 < _episodeCount ? () => _loadEpisode(_episodeIndex + 1) : null,
+                          onPressed: _episodeIndex + 1 < _episodeCount ? () { setState(() { _episodeIndex++; _loading = true; }); _loadCurrent(); } : null,
                           icon: const Icon(Icons.skip_next, color: Colors.white, size: 20),
                           label: const Text('Next', style: TextStyle(color: Colors.white)),
                         ),
