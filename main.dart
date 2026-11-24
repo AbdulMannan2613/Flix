@@ -1435,15 +1435,18 @@ class DetailsScreen extends StatefulWidget {
 }
 class _DetailsScreenState extends State<DetailsScreen> {
   bool _fav = false;
+
   @override
   void initState() {
     super.initState();
     _loadFav();
   }
+
   Future<void> _loadFav() async {
     final p = await SharedPreferences.getInstance();
     setState(() => _fav = (p.getStringList('favorites') ?? []).contains(widget.movie.id));
   }
+
   Future<void> _toggleFav() async {
     final p = await SharedPreferences.getInstance();
     final list = p.getStringList('favorites') ?? [];
@@ -1451,6 +1454,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     await p.setStringList('favorites', list);
     setState(() => _fav = !_fav);
   }
+
   Future<void> _download() async {
     if (widget.movie.videoUrl.isEmpty && widget.movie.episodes.isEmpty) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('noVideo'))));
@@ -1518,12 +1522,35 @@ class _DetailsScreenState extends State<DetailsScreen> {
               ),
               const SizedBox(height: 10),
               Row(children: [
-  Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? Lang.t('saved') : Lang.t('favorite')))),
-  const SizedBox(width: 10),
-  // SIRF ADMIN MOVIES KE LIYE DOWNLOAD DIKHAYEIN
-  if (!NexStreamHelper.canPlay(m))
-    Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: Text(Lang.t('download')))),
-]),
+                Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? Lang.t('saved') : Lang.t('favorite')))),
+                const SizedBox(width: 10),
+                if (!NexStreamHelper.canPlay(m))
+                  Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: Text(Lang.t('download')))),
+              ]),
+              const SizedBox(height: 20),
+              Text(Lang.t('description'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Text(m.description, style: const TextStyle(color: Colors.white70, height: 1.5)),
+              if (m.type == 'TV Show' || m.type == 'Web Series') ...[
+                const SizedBox(height: 20),
+                Text('${Lang.t('episodes')} (${m.episodes.isNotEmpty ? m.episodes.length : 3})', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Text(Lang.tr('episodesIn', '{n}', '${m.episodes.isNotEmpty ? m.episodes.length : 3}').replaceAll('{t}', m.type.toLowerCase()), style: const TextStyle(color: kGrey)),
+                ...List.generate(m.episodes.isNotEmpty ? m.episodes.length : 3, (i) => ListTile(
+                  leading: const Icon(Icons.play_circle_fill, color: kRed),
+                  title: Text('${Lang.t('episode')} ${i + 1}'),
+                  subtitle: Text(m.type),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _playNow(episodeIndex: i),
+                )),
+              ],
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+}
 
 // ---------------- MULTI-PROVIDER PLAYER ----------------
 class NexStreamPlayerScreen extends StatefulWidget {
@@ -1585,19 +1612,16 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
         },
         onPageFinished: (_) {
           if (mounted) {
-            // Ad Blocker Inject karein
             _controller?.runJavaScript("window.open = function(){ console.log('Ad blocked'); };");
             setState(() => _loading = false);
           }
         },
         onWebResourceError: (e) {
-          // Agar server fail ho jaye, toh turant next server try karein
           _tryNextProvider();
         },
       ))
       ..loadRequest(Uri.parse(url));
 
-    // 12 second ka timer: Agar video load nahi hui, toh auto next server
     _fallbackTimer = Timer(const Duration(seconds: 12), () {
       if (mounted && _loading) {
         _tryNextProvider();
@@ -1614,7 +1638,6 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
       });
       _loadCurrent();
     } else {
-      // Agar sab server fail ho gaye
       if (mounted) {
         setState(() {
           _loading = false;
@@ -1630,7 +1653,7 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
       _episodeIndex = index;
       _loading = true;
       _error = null;
-      _providerIndex = 0; // Naye episode par pehle server se start karein
+      _providerIndex = 0;
     });
     _loadCurrent();
   }
@@ -1726,7 +1749,6 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                     ),
                   ),
-                  // Server Indicator (User ko pata rahe kaunsa server chal raha hai)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     margin: const EdgeInsets.only(right: 8),
@@ -1774,6 +1796,145 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
                 ),
               ),
             ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ---------------- PLAYER (Admin/Offline) ----------------
+class PlayerScreen extends StatefulWidget {
+  final Movie movie; final int startAt; final int episodeIndex;
+  const PlayerScreen({super.key, required this.movie, this.startAt = 0, this.episodeIndex = 0});
+  @override
+  State<PlayerScreen> createState() => _PlayerScreenState();
+}
+class _PlayerScreenState extends State<PlayerScreen> {
+  VideoPlayerController? _c;
+  bool _showControls = true;
+  String _quality = 'Auto';
+  late int _episodeIndex;
+  String? _flash;
+  Timer? _flashTimer;
+  bool _advancing = false;
+  List<String> get _episodeUrls => widget.movie.episodes.isNotEmpty ? widget.movie.episodes : [widget.movie.videoUrl];
+  bool get _isSeries => widget.movie.type == 'TV Show' || widget.movie.type == 'Web Series';
+  @override
+  void initState() {
+    super.initState();
+    _episodeIndex = widget.episodeIndex.clamp(0, _episodeUrls.length - 1);
+    SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
+    _init(_episodeUrls[_episodeIndex]);
+  }
+  Future<void> _init(String url) async {
+    final old = _c; await old?.dispose();
+    final c = VideoPlayerController.networkUrl(Uri.parse(url));
+    await c.initialize();
+    if (widget.startAt > 0 && _episodeIndex == widget.episodeIndex) await c.seekTo(Duration(seconds: widget.startAt));
+    c.play();
+    c.addListener(() {
+      if (!mounted) return;
+      if (c.value.isInitialized && c.value.duration.inSeconds > 0 &&
+          c.value.position.inSeconds >= c.value.duration.inSeconds &&
+          !c.value.isPlaying && !_advancing) {
+        _playNext(auto: true);
+      }
+      if (mounted) setState(() {});
+    });
+    setState(() => _c = c);
+  }
+  Future<void> _playEpisode(int index) async {
+    if (index < 0 || index >= _episodeUrls.length) return;
+    _advancing = true;
+    setState(() => _episodeIndex = index);
+    await _init(_episodeUrls[index]);
+    _advancing = false;
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${Lang.t('playingEpisode')} ${index + 1}'), duration: const Duration(seconds: 2)));
+  }
+  void _playNext({bool auto = false}) {
+    if (_episodeIndex + 1 < _episodeUrls.length) {
+      _playEpisode(_episodeIndex + 1);
+    } else if (!auto && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('lastEpisode'))));
+    }
+  }
+  @override
+  void dispose() {
+    _flashTimer?.cancel();
+    final c = _c;
+    if (c != null && c.value.isInitialized) {
+      saveWatchPosition(widget.movie.id, c.value.position.inSeconds, c.value.duration.inSeconds);
+    }
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    c?.dispose();
+    super.dispose();
+  }
+  void _seek(int seconds) {
+    final c = _c; if (c == null) return;
+    final target = c.value.position + Duration(seconds: seconds);
+    c.seekTo(target < Duration.zero ? Duration.zero : target);
+    _flashTimer?.cancel();
+    setState(() => _flash = seconds < 0 ? '-10s' : '+10s');
+    _flashTimer = Timer(const Duration(milliseconds: 800), () { if (mounted) setState(() => _flash = null); });
+  }
+  @override
+  Widget build(BuildContext context) {
+    final c = _c;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onTap: () => setState(() => _showControls = !_showControls),
+        onDoubleTapDown: (details) {
+          final width = MediaQuery.of(context).size.width;
+          _seek(details.globalPosition.dx < width / 2 ? -10 : 10);
+          setState(() => _showControls = true);
+        },
+        child: Stack(children: [
+          Center(child: c == null || !c.value.isInitialized ? const CircularProgressIndicator(color: kRed) : AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c))),
+          if (_flash != null)
+            Center(child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)), child: Text(_flash!, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)))),
+          if (_showControls && c != null && c.value.isInitialized) ...[
+            Positioned(top: 16, left: 12, child: Row(children: [
+              IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
+              Expanded(child: Text(_isSeries ? '${widget.movie.title} • ${Lang.t('episode')} ${_episodeIndex + 1}' : widget.movie.title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.settings, color: Colors.white),
+                onSelected: (q) {
+                  setState(() => _quality = q);
+                  if (q != 'Auto' && widget.movie.qualities.containsKey(q)) {
+                    final pos = c.value.position.inSeconds;
+                    _init(widget.movie.qualities[q]!).then((_) => _c?.seekTo(Duration(seconds: pos)));
+                  }
+                },
+                itemBuilder: (_) => ['Auto', ...widget.movie.qualities.keys].map((q) => PopupMenuItem(value: q, child: Text(q))).toList(),
+              ),
+            ])),
+            Center(
+              child: IconButton(iconSize: 72, icon: Icon(c.value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled, color: Colors.white), onPressed: () => c.value.isPlaying ? c.pause() : c.play()),
+            ),
+            Positioned(bottom: 12, left: 16, right: 16, child: Column(children: [
+              Row(children: [
+                Text(fmtTime(c.value.position.inSeconds), style: const TextStyle(color: Colors.white)),
+                Expanded(child: Slider(
+                  value: c.value.position.inSeconds.toDouble().clamp(0.0, c.value.duration.inSeconds.toDouble()).toDouble(),
+                  max: c.value.duration.inSeconds.toDouble() == 0 ? 1.0 : c.value.duration.inSeconds.toDouble(),
+                  activeColor: kRed,
+                  onChanged: (v) => c.seekTo(Duration(seconds: v.toInt())),
+                )),
+                Text(fmtTime(c.value.duration.inSeconds), style: const TextStyle(color: Colors.white)),
+                const SizedBox(width: 8),
+                Text(_quality, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              ]),
+              if (_isSeries)
+                Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Text('${Lang.t('episode')} ${_episodeIndex + 1} of ${_episodeUrls.length}', style: const TextStyle(color: Colors.white70)),
+                  if (_episodeIndex + 1 < _episodeUrls.length) ...[
+                    const SizedBox(width: 12),
+                    TextButton.icon(onPressed: () => _playNext(), icon: const Icon(Icons.skip_next, color: Colors.white, size: 18), label: Text(Lang.t('nextEpisode'), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+                  ],
+                ]),
+            ])),
+          ],
         ]),
       ),
     );
@@ -2481,12 +2642,8 @@ class _AdminScreenState extends State<AdminScreen> {
           const Text('App download link (used in the Share message)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Row(children: [
-  Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? Lang.t('saved') : Lang.t('favorite')))),
-  const SizedBox(width: 10),
-  // SIRF ADMIN MOVIES KE LIYE DOWNLOAD DIKHAYEIN
-  if (!NexStreamHelper.canPlay(m))
-    Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: Text(Lang.t('download')))),
-]),
+            Expanded(child: TextField(controller: _downloadLink, decoration: const InputDecoration(labelText: 'Download page / file link', border: OutlineInputBorder()))),
+            const SizedBox(width: 10),
             ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white), onPressed: () async {
               await Prefs.setDownloadLink(_downloadLink.text.trim());
               if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Download link saved')));
