@@ -325,7 +325,8 @@ class Tmdb {
 
 // ---------------- MULTI-PROVIDER HELPER ----------------
 class NexStreamHelper {
-  static const List<String> providerNames = ['VidSrc', '2Embed', 'VidLink'];
+  // Asli naam chhupa kar Server 1, 2, 3 kar diya hai
+  static const List<String> providerNames = ['Server 1', 'Server 2', 'Server 3'];
 
   static bool canPlay(Movie movie) =>
       movie.id.startsWith('tmdb_') && movie.videoUrl.isEmpty;
@@ -337,21 +338,32 @@ class NexStreamHelper {
     return null;
   }
 
-  static String buildEmbedUrl(Movie movie, {int providerIndex = 0, int episodeIndex = 0, int season = 1}) {
+  static String buildEmbedUrl(Movie movie, {int providerIndex = 0, int episodeIndex = 0, int season = 1, int startSeconds = 0}) {
     final id = _tmdbId(movie);
     if (id == null) return '';
     final ep = episodeIndex + 1;
     final isTv = movie.type == 'TV Show' || movie.type == 'Web Series';
+    
+    // Agar pehle se koi time saved hai, toh URL mein add karein
+    final timeParam = startSeconds > 0 ? '&t=$startSeconds' : '';
 
     switch (providerIndex) {
-      case 0: // VidSrc
-        return isTv ? 'https://vidsrc.xyz/embed/tv?tmdb=$id&season=$season&episode=$ep' : 'https://vidsrc.xyz/embed/movie?tmdb=$id';
-      case 1: // 2Embed
-        return isTv ? 'https://www.2embed.cc/embedtv/$id&s=$season&e=$ep' : 'https://www.2embed.cc/embed/$id';
-      case 2: // VidLink
-        return isTv ? 'https://vidlink.pro/tv/$id/$season/$ep' : 'https://vidlink.pro/movie/$id';
+      case 0: // Server 1 (VidSrc)
+        return isTv 
+            ? 'https://vidsrc.cc/v2/embed/tv/$id/$season/$ep?autoPlay=true$timeParam' 
+            : 'https://vidsrc.cc/v2/embed/movie/$id?autoPlay=true$timeParam';
+      case 1: // Server 2 (2Embed)
+        return isTv 
+            ? 'https://www.2embed.cc/embedtv/$id&s=$season&e=$ep$timeParam' 
+            : 'https://www.2embed.cc/embed/$id?t=$startSeconds';
+      case 2: // Server 3 (VidLink)
+        return isTv 
+            ? 'https://vidlink.pro/tv/$id/$season/$ep?autoplay=true$timeParam' 
+            : 'https://vidlink.pro/movie/$id?autoplay=true$timeParam';
       default:
-        return isTv ? 'https://vidsrc.xyz/embed/tv?tmdb=$id&season=$season&episode=$ep' : 'https://vidsrc.xyz/embed/movie?tmdb=$id';
+        return isTv 
+            ? 'https://vidsrc.cc/v2/embed/tv/$id/$season/$ep?autoPlay=true$timeParam' 
+            : 'https://vidsrc.cc/v2/embed/movie/$id?autoPlay=true$timeParam';
     }
   }
 }
