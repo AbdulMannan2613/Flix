@@ -389,71 +389,7 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
       setState(() {
         _loading = false;
         _error = 'NexStream link not available for this title.';
-      });
-      return;
-    }
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(Colors.black)
-      ..setNavigationDelegate(NavigationDelegate(
-        onPageStarted: (_) {
-          if (mounted) setState(() { _loading = true; _error = null; });
-        },
-        onPageFinished: (_) {
-          if (mounted) setState(() => _loading = false);
-        },
-        onWebResourceError: (e) {
-          if (mounted) {
-            setState(() {
-              _loading = false;
-              _error = e.description;
-            });
-          }
-        },
-      ))
-      ..loadRequest(Uri.parse(url));
-  }
 
-  void _loadEpisode(int index) {
-    if (index < 0 || index >= _episodeCount) return;
-    setState(() {
-      _episodeIndex = index;
-      _loading = true;
-      _error = null;
-    });
-    _loadCurrent();
-  }
-
-  @override
-  void dispose() {
-    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, result) async {
-        if (didPop) return;
-        final c = _controller;
-        if (c != null) {
-          final canGoBack = await c.canGoBack();
-          if (canGoBack) {
-            await c.goBack();
-          } else {
-            if (context.mounted) Navigator.pop(context);
-          }
-        } else {
-          if (context.mounted) Navigator.pop(context);
-        }
-      },
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        body: Stack(children: [
-          if (_error != null)
-            Center(
 
 // ---------------- MULTI-PROVIDER HELPER ----------------
 class NexStreamHelper {
@@ -1655,30 +1591,6 @@ class _DetailsScreenState extends State<DetailsScreen> {
                 const SizedBox(width: 10),
                 Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: Text(Lang.t('download')))),
               ]),
-              const SizedBox(height: 20),
-              Text(Lang.t('description'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Text(m.description, style: const TextStyle(color: Colors.white70, height: 1.5)),
-              if (m.type == 'TV Show' || m.type == 'Web Series') ...[
-                const SizedBox(height: 20),
-                Text('${Lang.t('episodes')} (${m.episodes.isNotEmpty ? m.episodes.length : 3})', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                Text(Lang.tr('episodesIn', '{n}', '${m.episodes.isNotEmpty ? m.episodes.length : 3}').replaceAll('{t}', m.type.toLowerCase()), style: const TextStyle(color: kGrey)),
-                ...List.generate(m.episodes.isNotEmpty ? m.episodes.length : 3, (i) => ListTile(
-                  leading: const Icon(Icons.play_circle_fill, color: kRed),
-                  title: Text('${Lang.t('episode')} ${i + 1}'),
-                  subtitle: Text(m.type),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => _playNow(episodeIndex: i),
-                )),
-              ],
-            ]),
-          ),
-        ]),
-      ),
-    );
-  }
-}
 
 // ---------------- MULTI-PROVIDER PLAYER ----------------
 class NexStreamPlayerScreen extends StatefulWidget {
