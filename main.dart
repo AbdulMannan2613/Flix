@@ -454,110 +454,38 @@ class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
         body: Stack(children: [
           if (_error != null)
             Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.error_outline,
-                      color: Colors.white70, size: 48),
-                  const SizedBox(height: 12),
-                  Text(_error!,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white70)),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: kRed, foregroundColor: Colors.white),
-                    onPressed: () {
-                      setState(() { _error = null; _loading = true; });
-                      _loadCurrent();
-                    },
-                    child: const Text('Retry'),
-                  ),
-                ]),
-              ),
-            )
-          else if (_controller != null)
-            WebViewWidget(controller: _controller!),
-          if (_loading && _error == null)
-            const Center(child: CircularProgressIndicator(color: kRed)),
-          Positioned(
-            top: 0, left: 0, right: 0,
-            child: SafeArea(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Colors.black87, Colors.transparent],
-                  ),
-                ),
-                child: Row(children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                  Expanded(
-                    child: Text(
-                      _isSeries
-                          ? '${widget.movie.title} • ${Lang.t('episode')} ${_episodeIndex + 1}'
-                          : widget.movie.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ]),
-              ),
-            ),
-          ),
-          if (_isSeries && _error == null && !_loading)
-            Positioned(
-              bottom: 12, left: 12, right: 12,
-              child: SafeArea(
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        TextButton.icon(
-                          onPressed: _episodeIndex > 0
-                              ? () => _loadEpisode(_episodeIndex - 1)
-                              : null,
-                          icon: const Icon(Icons.skip_previous,
-                              color: Colors.white, size: 20),
-                          label: const Text('Prev',
-                              style: TextStyle(color: Colors.white)),
-                        ),
-                        const SizedBox(width: 8),
-                        Text('${_episodeIndex + 1} / $_episodeCount',
-                            style: const TextStyle(color: Colors.white)),
-                        const SizedBox(width: 8),
-                        TextButton.icon(
-                          onPressed: _episodeIndex + 1 < _episodeCount
-                              ? () => _loadEpisode(_episodeIndex + 1)
-                              : null,
-                          icon: const Icon(Icons.skip_next,
-                              color: Colors.white, size: 20),
-                          label: const Text('Next',
-                              style: TextStyle(color: Colors.white)),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ]),
-      ),
-    );
+
+// ---------------- MULTI-PROVIDER HELPER ----------------
+class NexStreamHelper {
+  // 'VidSrc (Main)', '2Embed', 'VidLink'
+  static const List<String> providerNames = ['VidSrc', '2Embed', 'VidLink'];
+
+  static bool canPlay(Movie movie) =>
+      movie.id.startsWith('tmdb_') && movie.videoUrl.isEmpty;
+
+  static String? _tmdbId(Movie movie) {
+    final raw = movie.id;
+    if (raw.startsWith('tmdb_tv_')) return raw.replaceFirst('tmdb_tv_', '');
+    if (raw.startsWith('tmdb_')) return raw.replaceFirst('tmdb_', '');
+    return null;
+  }
+
+  static String buildEmbedUrl(Movie movie, {int providerIndex = 0, int episodeIndex = 0, int season = 1}) {
+    final id = _tmdbId(movie);
+    if (id == null) return '';
+    final ep = episodeIndex + 1;
+    final isTv = movie.type == 'TV Show' || movie.type == 'Web Series';
+
+    switch (providerIndex) {
+      case 0: // VidSrc (Sabse reliable)
+        return isTv ? 'https://vidsrc.xyz/embed/tv?tmdb=$id&season=$season&episode=$ep' : 'https://vidsrc.xyz/embed/movie?tmdb=$id';
+      case 1: // 2Embed
+        return isTv ? 'https://www.2embed.cc/embedtv/$id&s=$season&e=$ep' : 'https://www.2embed.cc/embed/$id';
+      case 2: // VidLink
+        return isTv ? 'https://vidlink.pro/tv/$id/$season/$ep' : 'https://vidlink.pro/movie/$id';
+      default:
+        return isTv ? 'https://vidsrc.xyz/embed/tv?tmdb=$id&season=$season&episode=$ep' : 'https://vidsrc.xyz/embed/movie?tmdb=$id';
+    }
   }
 }
 
@@ -1084,7 +1012,7 @@ class Prefs {
     if (invited >= 3) d += 5;
     if (invited >= 5) d += 10;
     if (invited >= 7) d += 15;
-    if (invited >= 10) d += 3650;
+    if (invited >= 10) d += 365;
     return d;
   }
 }
@@ -1752,138 +1680,255 @@ class _DetailsScreenState extends State<DetailsScreen> {
   }
 }
 
-class PlayerScreen extends StatefulWidget {
-  final Movie movie; final int startAt; final int episodeIndex;
-  const PlayerScreen({super.key, required this.movie, this.startAt = 0, this.episodeIndex = 0});
+// ---------------- MULTI-PROVIDER PLAYER ----------------
+class NexStreamPlayerScreen extends StatefulWidget {
+  final Movie movie;
+  final int episodeIndex;
+  const NexStreamPlayerScreen(
+      {super.key, required this.movie, this.episodeIndex = 0});
+
   @override
-  State<PlayerScreen> createState() => _PlayerScreenState();
+  State<NexStreamPlayerScreen> createState() => _NexStreamPlayerScreenState();
 }
-class _PlayerScreenState extends State<PlayerScreen> {
-  VideoPlayerController? _c;
-  bool _showControls = true;
-  String _quality = 'Auto';
+
+class _NexStreamPlayerScreenState extends State<NexStreamPlayerScreen> {
+  WebViewController? _controller;
+  bool _loading = true;
+  String? _error;
   late int _episodeIndex;
-  String? _flash;
-  Timer? _flashTimer;
-  bool _advancing = false;
-  List<String> get _episodeUrls => widget.movie.episodes.isNotEmpty ? widget.movie.episodes : [widget.movie.videoUrl];
-  bool get _isSeries => widget.movie.type == 'TV Show' || widget.movie.type == 'Web Series';
+  int _providerIndex = 0; 
+  Timer? _fallbackTimer;
+
+  bool get _isSeries =>
+      widget.movie.type == 'TV Show' || widget.movie.type == 'Web Series';
+
+  int get _episodeCount =>
+      widget.movie.episodes.isNotEmpty ? widget.movie.episodes.length : 3;
+
   @override
   void initState() {
     super.initState();
-    _episodeIndex = widget.episodeIndex.clamp(0, _episodeUrls.length - 1);
-    SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
-    _init(_episodeUrls[_episodeIndex]);
+    _episodeIndex = widget.episodeIndex.clamp(0, _episodeCount - 1);
+    SystemChrome.setPreferredOrientations(
+        [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _loadCurrent();
   }
-  Future<void> _init(String url) async {
-    final old = _c; await old?.dispose();
-    final c = VideoPlayerController.networkUrl(Uri.parse(url));
-    await c.initialize();
-    if (widget.startAt > 0 && _episodeIndex == widget.episodeIndex) await c.seekTo(Duration(seconds: widget.startAt));
-    c.play();
-    c.addListener(() {
-      if (!mounted) return;
-      if (c.value.isInitialized && c.value.duration.inSeconds > 0 &&
-          c.value.position.inSeconds >= c.value.duration.inSeconds &&
-          !c.value.isPlaying && !_advancing) {
-        _playNext(auto: true);
+
+  void _loadCurrent() {
+    _fallbackTimer?.cancel();
+    final url = NexStreamHelper.buildEmbedUrl(
+      widget.movie, 
+      providerIndex: _providerIndex, 
+      episodeIndex: _episodeIndex
+    );
+    
+    if (url.isEmpty) {
+      setState(() {
+        _loading = false;
+        _error = 'Stream link not available.';
+      });
+      return;
+    }
+    
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(Colors.black)
+      ..setNavigationDelegate(NavigationDelegate(
+        onPageStarted: (_) {
+          if (mounted) setState(() { _loading = true; _error = null; });
+        },
+        onPageFinished: (_) {
+          if (mounted) {
+            // Ad Blocker Inject karein
+            _controller?.runJavaScript("window.open = function(){ console.log('Ad blocked'); };");
+            setState(() => _loading = false);
+          }
+        },
+        onWebResourceError: (e) {
+          // Agar server fail ho jaye, toh turant next server try karein
+          _tryNextProvider();
+        },
+      ))
+      ..loadRequest(Uri.parse(url));
+
+    // 12 second ka timer: Agar video load nahi hui, toh auto next server
+    _fallbackTimer = Timer(const Duration(seconds: 12), () {
+      if (mounted && _loading) {
+        _tryNextProvider();
       }
-      if (mounted) setState(() {});
     });
-    setState(() => _c = c);
   }
-  Future<void> _playEpisode(int index) async {
-    if (index < 0 || index >= _episodeUrls.length) return;
-    _advancing = true;
-    setState(() => _episodeIndex = index);
-    await _init(_episodeUrls[index]);
-    _advancing = false;
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${Lang.t('playingEpisode')} ${index + 1}'), duration: const Duration(seconds: 2)));
-  }
-  void _playNext({bool auto = false}) {
-    if (_episodeIndex + 1 < _episodeUrls.length) {
-      _playEpisode(_episodeIndex + 1);
-    } else if (!auto && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(Lang.t('lastEpisode'))));
+
+  void _tryNextProvider() {
+    if (_providerIndex < NexStreamHelper.providerNames.length - 1) {
+      setState(() {
+        _providerIndex++;
+        _loading = true;
+        _error = null;
+      });
+      _loadCurrent();
+    } else {
+      // Agar sab server fail ho gaye
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'All servers failed to load this video. Please try again later.';
+        });
+      }
     }
   }
+
+  void _loadEpisode(int index) {
+    if (index < 0 || index >= _episodeCount) return;
+    setState(() {
+      _episodeIndex = index;
+      _loading = true;
+      _error = null;
+      _providerIndex = 0; // Naye episode par pehle server se start karein
+    });
+    _loadCurrent();
+  }
+
   @override
   void dispose() {
-    _flashTimer?.cancel();
-    final c = _c;
-    if (c != null && c.value.isInitialized) {
-      saveWatchPosition(widget.movie.id, c.value.position.inSeconds, c.value.duration.inSeconds);
-    }
+    _fallbackTimer?.cancel();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
-    c?.dispose();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
-  void _seek(int seconds) {
-    final c = _c; if (c == null) return;
-    final target = c.value.position + Duration(seconds: seconds);
-    c.seekTo(target < Duration.zero ? Duration.zero : target);
-    _flashTimer?.cancel();
-    setState(() => _flash = seconds < 0 ? '-10s' : '+10s');
-    _flashTimer = Timer(const Duration(milliseconds: 800), () { if (mounted) setState(() => _flash = null); });
-  }
+
   @override
   Widget build(BuildContext context) {
-    final c = _c;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: GestureDetector(
-        onTap: () => setState(() => _showControls = !_showControls),
-        onDoubleTapDown: (details) {
-          final width = MediaQuery.of(context).size.width;
-          _seek(details.globalPosition.dx < width / 2 ? -10 : 10);
-          setState(() => _showControls = true);
-        },
-        child: Stack(children: [
-          Center(child: c == null || !c.value.isInitialized ? const CircularProgressIndicator(color: kRed) : AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c))),
-          if (_flash != null)
-            Center(child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)), child: Text(_flash!, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)))),
-          if (_showControls && c != null && c.value.isInitialized) ...[
-            Positioned(top: 16, left: 12, child: Row(children: [
-              IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
-              Expanded(child: Text(_isSeries ? '${widget.movie.title} • ${Lang.t('episode')} ${_episodeIndex + 1}' : widget.movie.title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.settings, color: Colors.white),
-                onSelected: (q) {
-                  setState(() => _quality = q);
-                  if (q != 'Auto' && widget.movie.qualities.containsKey(q)) {
-                    final pos = c.value.position.inSeconds;
-                    _init(widget.movie.qualities[q]!).then((_) => _c?.seekTo(Duration(seconds: pos)));
-                  }
-                },
-                itemBuilder: (_) => ['Auto', ...widget.movie.qualities.keys].map((q) => PopupMenuItem(value: q, child: Text(q))).toList(),
-              ),
-            ])),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final c = _controller;
+        if (c != null) {
+          final canGoBack = await c.canGoBack();
+          if (canGoBack) {
+            await c.goBack();
+          } else {
+            if (context.mounted) Navigator.pop(context);
+          }
+        } else {
+          if (context.mounted) Navigator.pop(context);
+        }
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(children: [
+          if (_error != null)
             Center(
-              child: IconButton(iconSize: 72, icon: Icon(c.value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled, color: Colors.white), onPressed: () => c.value.isPlaying ? c.pause() : c.play()),
-            ),
-            Positioned(bottom: 12, left: 16, right: 16, child: Column(children: [
-              Row(children: [
-                Text(fmtTime(c.value.position.inSeconds), style: const TextStyle(color: Colors.white)),
-                Expanded(child: Slider(
-                  value: c.value.position.inSeconds.toDouble().clamp(0.0, c.value.duration.inSeconds.toDouble()).toDouble(),
-                  max: c.value.duration.inSeconds.toDouble() == 0 ? 1.0 : c.value.duration.inSeconds.toDouble(),
-                  activeColor: kRed,
-                  onChanged: (v) => c.seekTo(Duration(seconds: v.toInt())),
-                )),
-                Text(fmtTime(c.value.duration.inSeconds), style: const TextStyle(color: Colors.white)),
-                const SizedBox(width: 8),
-                Text(_quality, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-              ]),
-              if (_isSeries)
-                Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Text('${Lang.t('episode')} ${_episodeIndex + 1} of ${_episodeUrls.length}', style: const TextStyle(color: Colors.white70)),
-                  if (_episodeIndex + 1 < _episodeUrls.length) ...[
-                    const SizedBox(width: 12),
-                    TextButton.icon(onPressed: () => _playNext(), icon: const Icon(Icons.skip_next, color: Colors.white, size: 18), label: Text(Lang.t('nextEpisode'), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
-                  ],
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.error_outline, color: Colors.white70, size: 48),
+                  const SizedBox(height: 12),
+                  Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white),
+                    onPressed: () {
+                      setState(() { _error = null; _loading = true; _providerIndex = 0; });
+                      _loadCurrent();
+                    },
+                    child: const Text('Retry All Servers'),
+                  ),
                 ]),
-            ])),
-          ],
+              ),
+            )
+          else if (_controller != null)
+            WebViewWidget(controller: _controller!),
+            
+          if (_loading && _error == null)
+            const Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(color: kRed),
+                  SizedBox(height: 16),
+                  Text("Connecting to server...", style: TextStyle(color: Colors.white)),
+                ],
+              ),
+            ),
+            
+          Positioned(
+            top: 0, left: 0, right: 0,
+            child: SafeArea(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.black87, Colors.transparent],
+                  ),
+                ),
+                child: Row(children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                  Expanded(
+                    child: Text(
+                      _isSeries
+                          ? '${widget.movie.title} • Ep ${_episodeIndex + 1}'
+                          : widget.movie.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  // Server Indicator (User ko pata rahe kaunsa server chal raha hai)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(20)),
+                    child: Text(
+                      NexStreamHelper.providerNames[_providerIndex],
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                  )
+                ]),
+              ),
+            ),
+          ),
+          
+          if (_isSeries && _error == null && !_loading)
+            Positioned(
+              bottom: 12, left: 12, right: 12,
+              child: SafeArea(
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextButton.icon(
+                          onPressed: _episodeIndex > 0 ? () => _loadEpisode(_episodeIndex - 1) : null,
+                          icon: const Icon(Icons.skip_previous, color: Colors.white, size: 20),
+                          label: const Text('Prev', style: TextStyle(color: Colors.white)),
+                        ),
+                        const SizedBox(width: 8),
+                        Text('${_episodeIndex + 1} / $_episodeCount', style: const TextStyle(color: Colors.white)),
+                        const SizedBox(width: 8),
+                        TextButton.icon(
+                          onPressed: _episodeIndex + 1 < _episodeCount ? () => _loadEpisode(_episodeIndex + 1) : null,
+                          icon: const Icon(Icons.skip_next, color: Colors.white, size: 20),
+                          label: const Text('Next', style: TextStyle(color: Colors.white)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ]),
       ),
     );
@@ -2591,8 +2636,12 @@ class _AdminScreenState extends State<AdminScreen> {
           const Text('App download link (used in the Share message)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Row(children: [
-            Expanded(child: TextField(controller: _downloadLink, decoration: const InputDecoration(labelText: 'Download page / file link', border: OutlineInputBorder()))),
-            const SizedBox(width: 10),
+  Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? Lang.t('saved') : Lang.t('favorite')))),
+  const SizedBox(width: 10),
+  // SIRF ADMIN MOVIES KE LIYE DOWNLOAD DIKHAYEIN
+  if (!NexStreamHelper.canPlay(m))
+    Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: Text(Lang.t('download')))),
+]),
             ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white), onPressed: () async {
               await Prefs.setDownloadLink(_downloadLink.text.trim());
               if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Download link saved')));
