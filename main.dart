@@ -1536,6 +1536,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
               Row(children: [
                 Expanded(child: OutlinedButton.icon(onPressed: _toggleFav, icon: Icon(_fav ? Icons.favorite : Icons.favorite_border, color: kRed), label: Text(_fav ? Lang.t('saved') : Lang.t('favorite')))),
                 const SizedBox(width: 10),
+                // SIRF ADMIN MOVIES KE LIYE DOWNLOAD DIKHAYEIN
                 if (!NexStreamHelper.canPlay(m))
                   Expanded(child: OutlinedButton.icon(onPressed: _download, icon: const Icon(Icons.download), label: Text(Lang.t('download')))),
               ]),
@@ -2717,11 +2718,11 @@ class _AdminScreenState extends State<AdminScreen> {
           const Text('App download link (used in the Share message)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Row(children: [
-            Expanded(child: TextField(controller: _downloadLink, decoration: const InputDecoration(labelText: 'Download page / file link', border: OutlineInputBorder()))),
-            const SizedBox(width: 10),
-            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white), onPressed: () async {
-              await Prefs.setDownloadLink(_downloadLink.text.trim());
-              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Download link saved')));
+           Expanded(child: TextField(controller: _downloadLink, decoration: const InputDecoration(labelText: 'Download page / file link', border: OutlineInputBorder()))),
+           const SizedBox(width: 10),
+           ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: kRed, foregroundColor: Colors.white), onPressed: () async {
+             await Prefs.setDownloadLink(_downloadLink.text.trim());
+             if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Download link saved')));
             }, child: const Text('Save link', style: TextStyle(color: Colors.white))),
           ]),
           const SizedBox(height: 16),
